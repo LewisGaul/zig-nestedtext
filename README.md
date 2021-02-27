@@ -1,6 +1,6 @@
 # zig-nestedtext
 
-A NestedText parser written in Zig 0.7 targeting [NestedText v1.3](https://github.com/KenKundert/nestedtext/tree/v1.3).
+A NestedText parser written in Zig 0.7 targeting [NestedText v1.3](https://nestedtext.org/en/v1.3/).
 
 
 ## Building and Usage
