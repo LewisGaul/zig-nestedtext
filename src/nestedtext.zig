@@ -1,5 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
+const assert = std.debug.assert;
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -90,7 +91,7 @@ pub const Parser = struct {
         lines: ArrayList(Line),
 
         pub fn init(lines: ArrayList(Line)) LinesIter {
-            var self = LinesIter{.next_idx = 0, .lines = lines};
+            var self = LinesIter{ .next_idx = 0, .lines = lines };
             self.skipIgnorableLines();
             return self;
         }
@@ -119,9 +120,8 @@ pub const Parser = struct {
         fn skipIgnorableLines(self: *LinesIter) void {
             while (self.next_idx < self.len()) {
                 switch (self.lines.items[self.next_idx].kind) {
-                    .Blank,
-                    .Comment => self.next_idx += 1,
-                    else => return
+                    .Blank, .Comment => self.next_idx += 1,
+                    else => return,
                 }
             }
         }
@@ -134,8 +134,7 @@ pub const Parser = struct {
         };
     }
 
-    pub fn deinit(p: Self) void {
-    }
+    pub fn deinit(p: Self) void {}
 
     pub fn parse(p: Self, input: []const u8) !ValueTree {
         var arena = ArenaAllocator.init(p.allocator);
@@ -147,22 +146,11 @@ pub const Parser = struct {
         const lines = try p.parseLines(input);
         defer lines.deinit();
 
-        const iter = LinesIter.init(lines);
-        const first_line = iter.peekNext();
-        if (first_line == null) return ValueTree{.arena = arena, .root = null};
-        const value: Value = switch (first_line.?.kind) {
-            .String => .{.String = try p.readString(iter)},
-            .List => .{.List = try p.readList(iter)},
-            .Object => .{.Object = try p.readObject(iter)},
-            .Unrecognised => return error.UnrecognisedLine,
-            .Blank,
-            .Comment => unreachable,
-        };
+        var iter = LinesIter.init(lines);
 
-        return ValueTree{
-            .arena = arena,
-            .root = value,
-        };
+        if (iter.peekNext() == null) return ValueTree{ .arena = arena, .root = null };
+
+        return ValueTree{ .arena = arena, .root = try p.readValue(&iter) };
     }
 
     /// Split the given input into an array of lines, where each entry is a
@@ -191,13 +179,13 @@ pub const Parser = struct {
                 depth = null;
             } else if (stripped[0] == '#') {
                 kind = .Comment;
-            } else if (stripped[0] == '-') {  // TODO: Handle expected space
+            } else if (stripped[0] == '-') { // TODO: Handle expected space
                 kind = .List;
                 value = stripped[2..];
-            } else if (stripped[0] == '>') {  // TODO: Handle expected space
+            } else if (stripped[0] == '>') { // TODO: Handle expected space
                 kind = .String;
                 value = stripped[2..];
-            } else if (false) {  // TODO: Handle objects
+            } else if (false) { // TODO: Handle objects
                 kind = .Object;
             } else {
                 kind = .Unrecognised;
@@ -215,15 +203,41 @@ pub const Parser = struct {
         return lines_array;
     }
 
-    fn readString(p: Self, lines: LinesIter) ![]const u8 {
+    fn readValue(p: Self, lines: *LinesIter) !Value {
+        // Call read<type>() with the iterator set up with the first line of the
+        // type queued up as the next line.
+        return switch (lines.peekNext().?.kind) {
+            .String => .{ .String = try p.readString(lines) },
+            .List => .{ .List = try p.readList(lines) },
+            .Object => .{ .Object = try p.readObject(lines) },
+            .Unrecognised => return error.UnrecognisedLine,
+            .Blank, .Comment => unreachable,
+        };
+    }
+
+    fn readString(p: Self, lines: *LinesIter) ![]const u8 {
         // TODO
         return error.NotImplemented;
     }
-    fn readList(p: Self, lines: LinesIter) !Array {
-        // TODO
-        return error.NotImplemented;
+
+    fn readList(p: Self, lines: *LinesIter) !Array {
+        var array = Array.init(p.allocator);
+
+        assert(lines.peekNext().?.kind == .List);
+        const depth = lines.peekNext().?.depth.?;
+
+        while (lines.peekNext() != null) {
+            const line = lines.next().?;
+            if (line.kind != .List) return error.InvalidListItem;
+            if (line.depth.? > depth) return error.InvalidListIndentation;
+            if (line.depth.? < depth) break;
+            // TODO: Check whether string should be copied.
+            try array.append(.{ .String = line.value.? });
+        }
+        return array;
     }
-    fn readObject(p: Self, lines: LinesIter) !Map {
+
+    fn readObject(p: Self, lines: *LinesIter) !Map {
         // TODO
         return error.NotImplemented;
     }
@@ -241,7 +255,14 @@ test "basic list parse" {
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var root = tree.root;
+    var root: Value = tree.root.?;
+    var array: Array = root.List;
+
+    var foo: []const u8 = array.items[0].String;
+    var bar: []const u8 = array.items[1].String;
+
+    testing.expectEqualStrings("foo", foo);
+    testing.expectEqualStrings("bar", bar);
 }
 
 test "basic string parse" {
