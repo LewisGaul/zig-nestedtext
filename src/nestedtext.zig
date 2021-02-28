@@ -20,22 +20,12 @@ pub const Array = ArrayList(Value);
 
 pub const Value = union(enum) {
     String: []const u8,
-    Array: Array,
+    List: Array,
     Object: Map,
 };
 
 pub const Parser = struct {
     allocator: *Allocator,
-    state: State,
-    // Stores parent nodes and un-combined Values.
-    stack: Array,
-
-    const State = enum {
-        String,
-        ArrayValue,
-        ObjectKey,
-        ObjectValue,
-    };
 
     const Self = @This();
 
@@ -51,38 +41,94 @@ pub const Parser = struct {
         copy_strings: bool = true,
     };
 
+    pub const LineType = enum {
+        Blank,
+        Comment,
+        String,
+        List,
+        Object,
+        Unrecgonised,
+    };
+
+    pub const Line = struct {
+        text: []const u8,
+        lineno: usize,
+        kind: LineType,
+        depth: ?usize,
+        key: ?[]const u8,
+        value: ?[]const u8,
+    };
+
     pub fn init(allocator: *Allocator) Self {
         return .{
             .allocator = allocator,
-            .state = .String,
-            .stack = Array.init(allocator),
         };
     }
 
     pub fn deinit(p: *Self) void {
-        p.stack.deinit();
     }
 
     pub fn parse(p: *Self, input: []const u8, options: ParseOptions) !ValueTree {
         var arena = ArenaAllocator.init(p.allocator);
         errdefer arena.deinit();
 
-        var idx: usize = 0;
-        var lineno: usize = 0;
-        std.debug.print("\n", .{});
-        while (p.readline(input[idx..])) |line| {
-            idx += line.len;
-            lineno += 1;
-            std.debug.print("Line {}: {}", .{ lineno, line });
-        }
-        std.debug.print("\n", .{});
-
+        const lines = try p.parseLines(input);
+        defer lines.deinit();
         // TODO
 
         return ValueTree{
             .arena = arena,
             .root = null,
         };
+    }
+
+    /// Split the given input into an array of lines, where each entry is a
+    /// struct instance containing relevant info.
+    fn parseLines(p: *Self, input: []const u8) !ArrayList(Line) {
+        var lines_array = ArrayList(Line).init(p.allocator);
+        var buf_idx: usize = 0;
+        var lineno: usize = 0;
+        std.debug.print("\n", .{});
+        while (p.readline(input[buf_idx..])) |full_line| {
+            buf_idx += full_line.len;
+            const text = std.mem.trimRight(u8, full_line, &[_]u8{ '\n', '\r' });
+            lineno += 1;
+            var kind: LineType = undefined;
+            var depth: ?usize = undefined;
+            var key: ?[]const u8 = null;
+            var value: ?[]const u8 = null;
+
+            std.debug.print("Line {}: {}\n", .{ lineno, text });
+
+            const stripped = std.mem.trimLeft(u8, text, &[_]u8{ ' ', '\t' });
+            depth = text.len - stripped.len;
+            if (stripped.len == 0) {
+                kind = .Blank;
+                depth = null;
+            } else if (stripped[0] == '#') {
+                kind = .Comment;
+            } else if (stripped[0] == '-') {  // TODO: Handle expected space
+                kind = .List;
+                value = stripped[2..];
+            } else if (stripped[0] == '>') {  // TODO: Handle expected space
+                kind = .String;
+                value = stripped[2..];
+            } else if (false) {  // TODO: Check for object line
+                kind = .Object;
+            } else {
+                kind = .Unrecgonised;
+            }
+            try lines_array.append(Line{
+                .text = text,
+                .lineno = lineno,
+                .kind = kind,
+                .depth = depth,
+                .key = key,
+                .value = value,
+            });
+        }
+        std.debug.print("\n", .{});
+        return lines_array;
     }
 
     /// Return a slice corresponding to the first line of the given input,
@@ -111,30 +157,61 @@ pub const Parser = struct {
     }
 };
 
-test "basic parse" {
+test "basic list parse" {
     var p = Parser.init(testing.allocator);
     defer p.deinit();
 
     const s =
-        \\ foo: 1
-        \\ bar: False
+        \\ - foo
+        \\ - bar
     ;
 
     var tree = try p.parse(s, .{});
     defer tree.deinit();
 
     var root = tree.root;
-
-    // const foo = root.Object.get("foo").?;
-    // const bar = root.Object.get("bar").?;
-    // testing.expectEqualSlices(foo, "1");
-    // testing.expectEqualSlices(bar, "False");
 }
+
+test "basic string parse" {
+    var p = Parser.init(testing.allocator);
+    defer p.deinit();
+
+    const s =
+        \\ > this is a
+        \\ > multiline
+        \\ > string
+    ;
+
+    var tree = try p.parse(s, .{});
+    defer tree.deinit();
+
+    var root = tree.root;
+}
+
+// test "basic object parse" {
+//     var p = Parser.init(testing.allocator);
+//     defer p.deinit();
+//
+//     const s =
+//         \\ foo: 1
+//         \\ bar: False
+//     ;
+//
+//     var tree = try p.parse(s, .{});
+//     defer tree.deinit();
+//
+//     var root = tree.root;
+
+//     // const foo = root.Object.get("foo").?;
+//     // const bar = root.Object.get("bar").?;
+//     // testing.expectEqualSlices(foo, "1");
+//     // testing.expectEqualSlices(bar, "False");
+// }
 
 // test "full parse" {
 //     var p = Parser.init(testing.allocator);
 //     defer p.deinit();
-
+//
 //     const s =
 //         \\ # Contact information for our officers
 //         \\
@@ -173,14 +250,14 @@ test "basic parse" {
 //         \\     additional roles:
 //         \\         - accounting task force
 //         ;
-
+//
 //     var tree = try p.parse(s, .{});
 //     defer tree.deinit();
-
+//
 //     var root = tree.root;
-
+//
 //     const president = root.?.Object.get("president").?;
-
+//
 //     const name = president.Object.get("name").?;
 //     testing.expectEqualSlices(name, "Katheryn McDaniel");
 // }
