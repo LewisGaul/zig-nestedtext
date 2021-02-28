@@ -24,8 +24,34 @@ pub const Value = union(enum) {
     Object: Map,
 };
 
+/// Return a slice corresponding to the first line of the given input,
+/// including the terminating newline character(s). If there is no terminating
+/// newline the entire input slice is returned. Returns null if the input is
+/// empty.
+fn readline(input: []const u8) ?[]const u8 {
+    if (input.len == 0) return null;
+    var idx: usize = 0;
+    while (idx < input.len) {
+        // Handle '\n'
+        if (input[idx] == '\n') {
+            idx += 1;
+            break;
+        }
+        // Handle '\r'
+        if (input[idx] == '\r') {
+            idx += 1;
+            // Handle '\r\n'
+            if (input.len >= idx and input[idx] == '\n') idx += 1;
+            break;
+        }
+        idx += 1;
+    }
+    return input[0..idx];
+}
+
 pub const Parser = struct {
     allocator: *Allocator,
+    options: ParseOptions,
 
     const Self = @This();
 
@@ -41,16 +67,16 @@ pub const Parser = struct {
         copy_strings: bool = true,
     };
 
-    pub const LineType = enum {
+    const LineType = enum {
         Blank,
         Comment,
         String,
         List,
         Object,
-        Unrecgonised,
+        Unrecognised,
     };
 
-    pub const Line = struct {
+    const Line = struct {
         text: []const u8,
         lineno: usize,
         kind: LineType,
@@ -59,37 +85,94 @@ pub const Parser = struct {
         value: ?[]const u8,
     };
 
-    pub fn init(allocator: *Allocator) Self {
+    const LinesIter = struct {
+        next_idx: usize,
+        lines: ArrayList(Line),
+
+        pub fn init(lines: ArrayList(Line)) LinesIter {
+            var self = LinesIter{.next_idx = 0, .lines = lines};
+            self.skipIgnorableLines();
+            return self;
+        }
+
+        pub fn peekNext(self: LinesIter) ?Line {
+            if (self.next_idx >= self.len()) return null;
+            return self.lines.items[self.next_idx];
+        }
+
+        pub fn next(self: *LinesIter) ?Line {
+            if (self.next_idx >= self.len()) return null;
+            const line = self.lines.items[self.next_idx];
+            self.advanceToNextContentLine();
+            return line;
+        }
+
+        fn len(self: LinesIter) usize {
+            return self.lines.items.len;
+        }
+
+        fn advanceToNextContentLine(self: *LinesIter) void {
+            self.next_idx += 1;
+            self.skipIgnorableLines();
+        }
+
+        fn skipIgnorableLines(self: *LinesIter) void {
+            while (self.next_idx < self.len()) {
+                switch (self.lines.items[self.next_idx].kind) {
+                    .Blank,
+                    .Comment => self.next_idx += 1,
+                    else => return
+                }
+            }
+        }
+    };
+
+    pub fn init(allocator: *Allocator, options: ParseOptions) Self {
         return .{
             .allocator = allocator,
+            .options = options,
         };
     }
 
-    pub fn deinit(p: *Self) void {
+    pub fn deinit(p: Self) void {
     }
 
-    pub fn parse(p: *Self, input: []const u8, options: ParseOptions) !ValueTree {
+    pub fn parse(p: Self, input: []const u8) !ValueTree {
         var arena = ArenaAllocator.init(p.allocator);
         errdefer arena.deinit();
 
+        // TODO: This should be an iterator, i.e. don't loop over all lines
+        //       up front (unnecessary performance and memory cost). We should
+        //       only need access to the current (and next?) line.
         const lines = try p.parseLines(input);
         defer lines.deinit();
-        // TODO
+
+        const iter = LinesIter.init(lines);
+        const first_line = iter.peekNext();
+        if (first_line == null) return ValueTree{.arena = arena, .root = null};
+        const value: Value = switch (first_line.?.kind) {
+            .String => .{.String = try p.readString(iter)},
+            .List => .{.List = try p.readList(iter)},
+            .Object => .{.Object = try p.readObject(iter)},
+            .Unrecognised => return error.UnrecognisedLine,
+            .Blank,
+            .Comment => unreachable,
+        };
 
         return ValueTree{
             .arena = arena,
-            .root = null,
+            .root = value,
         };
     }
 
     /// Split the given input into an array of lines, where each entry is a
     /// struct instance containing relevant info.
-    fn parseLines(p: *Self, input: []const u8) !ArrayList(Line) {
+    fn parseLines(p: Self, input: []const u8) !ArrayList(Line) {
         var lines_array = ArrayList(Line).init(p.allocator);
         var buf_idx: usize = 0;
         var lineno: usize = 0;
         std.debug.print("\n", .{});
-        while (p.readline(input[buf_idx..])) |full_line| {
+        while (readline(input[buf_idx..])) |full_line| {
             buf_idx += full_line.len;
             const text = std.mem.trimRight(u8, full_line, &[_]u8{ '\n', '\r' });
             lineno += 1;
@@ -100,6 +183,7 @@ pub const Parser = struct {
 
             std.debug.print("Line {}: {}\n", .{ lineno, text });
 
+            // TODO: Check leading space is entirely made up of space characters.
             const stripped = std.mem.trimLeft(u8, text, &[_]u8{ ' ', '\t' });
             depth = text.len - stripped.len;
             if (stripped.len == 0) {
@@ -113,10 +197,10 @@ pub const Parser = struct {
             } else if (stripped[0] == '>') {  // TODO: Handle expected space
                 kind = .String;
                 value = stripped[2..];
-            } else if (false) {  // TODO: Check for object line
+            } else if (false) {  // TODO: Handle objects
                 kind = .Object;
             } else {
-                kind = .Unrecgonised;
+                kind = .Unrecognised;
             }
             try lines_array.append(Line{
                 .text = text,
@@ -131,34 +215,22 @@ pub const Parser = struct {
         return lines_array;
     }
 
-    /// Return a slice corresponding to the first line of the given input,
-    /// including the terminating newline character(s). If there is no terminating
-    /// newline the entire input slice is returned. Returns null if the input is
-    /// empty.
-    fn readline(p: *Self, input: []const u8) ?[]const u8 {
-        if (input.len == 0) return null;
-        var idx: usize = 0;
-        while (idx < input.len) {
-            // Handle '\n'
-            if (input[idx] == '\n') {
-                idx += 1;
-                break;
-            }
-            // Handle '\r'
-            if (input[idx] == '\r') {
-                idx += 1;
-                // Handle '\r\n'
-                if (input.len >= idx and input[idx] == '\n') idx += 1;
-                break;
-            }
-            idx += 1;
-        }
-        return input[0..idx];
+    fn readString(p: Self, lines: LinesIter) ![]const u8 {
+        // TODO
+        return error.NotImplemented;
+    }
+    fn readList(p: Self, lines: LinesIter) !Array {
+        // TODO
+        return error.NotImplemented;
+    }
+    fn readObject(p: Self, lines: LinesIter) !Map {
+        // TODO
+        return error.NotImplemented;
     }
 };
 
 test "basic list parse" {
-    var p = Parser.init(testing.allocator);
+    var p = Parser.init(testing.allocator, .{});
     defer p.deinit();
 
     const s =
@@ -166,14 +238,14 @@ test "basic list parse" {
         \\ - bar
     ;
 
-    var tree = try p.parse(s, .{});
+    var tree = try p.parse(s);
     defer tree.deinit();
 
     var root = tree.root;
 }
 
 test "basic string parse" {
-    var p = Parser.init(testing.allocator);
+    var p = Parser.init(testing.allocator, .{});
     defer p.deinit();
 
     const s =
@@ -182,14 +254,14 @@ test "basic string parse" {
         \\ > string
     ;
 
-    var tree = try p.parse(s, .{});
+    var tree = try p.parse(s);
     defer tree.deinit();
 
     var root = tree.root;
 }
 
 // test "basic object parse" {
-//     var p = Parser.init(testing.allocator);
+//     var p = Parser.init(testing.allocator, .{});
 //     defer p.deinit();
 //
 //     const s =
@@ -197,7 +269,7 @@ test "basic string parse" {
 //         \\ bar: False
 //     ;
 //
-//     var tree = try p.parse(s, .{});
+//     var tree = try p.parse(s);
 //     defer tree.deinit();
 //
 //     var root = tree.root;
