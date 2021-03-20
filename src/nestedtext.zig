@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const ArrayList = std.ArrayList;
 const StringHashMap = std.StringHashMap;
+const Writer = std.io.Writer;
 
 pub const ValueTree = struct {
     arena: ArenaAllocator,
@@ -220,8 +221,22 @@ pub const Parser = struct {
     }
 
     fn readString(p: Self, allocator: *Allocator, lines: *LinesIter) ![]const u8 {
-        // TODO
-        return error.NotImplemented;
+        var buffer = ArrayList(u8).init(allocator);
+        errdefer buffer.deinit();
+        var writer = buffer.writer();
+
+        assert(lines.peekNext().?.kind == .String);
+        const depth = lines.peekNext().?.depth.?;
+
+        while (lines.peekNext() != null) {
+            const line = lines.next().?;
+            if (line.kind != .String) return error.InvalidString;
+            if (line.depth.? > depth) return error.InvalidStringIndentation;
+            if (line.depth.? < depth) break;
+            // String copied as it's not contiguous in-file.
+            try writer.writeAll(line.value.?);
+        }
+        return buffer.items;
     }
 
     fn readList(p: Self, allocator: *Allocator, lines: *LinesIter) !Array {
@@ -280,21 +295,24 @@ test "basic list parse" {
     testing.expectEqualStrings("bar", bar);
 }
 
-// test "basic string parse" {
-//     var p = Parser.init(testing.allocator, .{});
-//     defer p.deinit();
+test "basic string parse" {
+    var p = Parser.init(testing.allocator, .{});
+    defer p.deinit();
 
-//     const s =
-//         \\ > this is a
-//         \\ > multiline
-//         \\ > string
-//     ;
+    const s =
+        \\ > this is a
+        \\ > multiline
+        \\ > string
+    ;
 
-//     var tree = try p.parse(s);
-//     defer tree.deinit();
+    var tree = try p.parse(s);
+    defer tree.deinit();
 
-//     var root = tree.root;
-// }
+    var root: Value = tree.root.?;
+    var string: []const u8 = root.String;
+
+    // testing.expectEqualStrings(s, string);
+}
 
 // test "basic object parse" {
 //     var p = Parser.init(testing.allocator, .{});
