@@ -135,8 +135,6 @@ pub const Parser = struct {
         };
     }
 
-    pub fn deinit(p: Self) void {}
-
     /// Memory owned by caller on success - free with 'ValueTree.deinit()'.
     pub fn parse(p: Self, input: []const u8) !ValueTree {
         var tree = ValueTree{
@@ -148,6 +146,8 @@ pub const Parser = struct {
         // TODO: This should be an iterator, i.e. don't loop over all lines
         //       up front (unnecessary performance and memory cost). We should
         //       only need access to the current (and next?) line.
+        //       Note that it's only the struct instances that are allocated,
+        //       the string slices are from the input and owned by the caller.
         const lines = try p.parseLines(input);
         defer lines.deinit();
 
@@ -190,7 +190,7 @@ pub const Parser = struct {
                 value = stripped[2..];
             } else if (stripped[0] == '>') { // TODO: Handle expected space
                 kind = .String;
-                value = stripped[2..];
+                value = full_line[text.len - stripped.len + 2 ..];
             } else if (false) { // TODO: Handle objects
                 kind = .Object;
             } else {
@@ -231,8 +231,8 @@ pub const Parser = struct {
 
         while (lines.peekNext() != null) {
             const line = lines.next().?;
-            if (line.kind != .String) return error.InvalidString;
-            if (line.depth.? > depth) return error.InvalidStringIndentation;
+            if (line.kind != .String) return error.InvalidItem;
+            if (line.depth.? > depth) return error.InvalidIndentation;
             if (line.depth.? < depth) break;
             // String copied as it's not contiguous in-file.
             try writer.writeAll(line.value.?);
@@ -249,8 +249,8 @@ pub const Parser = struct {
 
         while (lines.peekNext() != null) {
             const line = lines.next().?;
-            if (line.kind != .List) return error.InvalidListItem;
-            if (line.depth.? > depth) return error.InvalidListIndentation;
+            if (line.kind != .List) return error.InvalidItem;
+            if (line.depth.? > depth) return error.InvalidIndentation;
             if (line.depth.? < depth) break;
             // TODO: Check whether string should be copied.
             try array.append(.{ .String = line.value.? });
@@ -259,14 +259,26 @@ pub const Parser = struct {
     }
 
     fn readObject(p: Self, allocator: *Allocator, lines: *LinesIter) !Map {
-        // TODO
-        return error.NotImplemented;
+        var map = Map.init(allocator);
+        errdefer map.deinit();
+
+        assert(lines.peekNext().?.kind == .Object);
+        const depth = lines.peekNext().?.depth.?;
+
+        while (lines.peekNext() != null) {
+            const line = lines.next().?;
+            if (line.kind != .Object) return error.InvalidItem;
+            if (line.depth.? > depth) return error.InvalidIndentation;
+            if (line.depth.? < depth) break;
+            // TODO: Check whether strings should be copied.
+            try map.put(line.key.?, .{ .String = line.value.? });
+        }
+        return map;
     }
 };
 
 test "parse empty" {
     var p = Parser.init(testing.allocator, .{});
-    defer p.deinit();
 
     var tree = try p.parse("");
     defer tree.deinit();
@@ -274,9 +286,26 @@ test "parse empty" {
     testing.expectEqual(@as(?Value, null), tree.root);
 }
 
+test "basic string parse" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const s =
+        \\ > this is a
+        \\ > multiline
+        \\ > string
+    ;
+
+    var tree = try p.parse(s);
+    defer tree.deinit();
+
+    var root: Value = tree.root.?;
+    var string: []const u8 = root.String;
+
+    testing.expectEqualStrings("this is a\nmultiline\nstring", string);
+}
+
 test "basic list parse" {
     var p = Parser.init(testing.allocator, .{});
-    defer p.deinit();
 
     const s =
         \\ - foo
@@ -296,28 +325,8 @@ test "basic list parse" {
     testing.expectEqualStrings("bar", bar);
 }
 
-test "basic string parse" {
-    var p = Parser.init(testing.allocator, .{});
-    defer p.deinit();
-
-    const s =
-        \\ > this is a
-        \\ > multiline
-        \\ > string
-    ;
-
-    var tree = try p.parse(s);
-    defer tree.deinit();
-
-    var root: Value = tree.root.?;
-    var string: []const u8 = root.String;
-
-    // testing.expectEqualStrings(s, string);
-}
-
 // test "basic object parse" {
 //     var p = Parser.init(testing.allocator, .{});
-//     defer p.deinit();
 //
 //     const s =
 //         \\ foo: 1
@@ -327,8 +336,8 @@ test "basic string parse" {
 //     var tree = try p.parse(s);
 //     defer tree.deinit();
 //
-//     var root = tree.root;
-
+//     var root: Value = tree.root.?;
+//
 //     // const foo = root.Object.get("foo").?;
 //     // const bar = root.Object.get("bar").?;
 //     // testing.expectEqualSlices(foo, "1");
@@ -337,7 +346,6 @@ test "basic string parse" {
 
 // test "full parse" {
 //     var p = Parser.init(testing.allocator);
-//     defer p.deinit();
 //
 //     const s =
 //         \\ # Contact information for our officers
