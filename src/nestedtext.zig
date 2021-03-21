@@ -139,8 +139,11 @@ pub const Parser = struct {
 
     /// Memory owned by caller on success - free with 'ValueTree.deinit()'.
     pub fn parse(p: Self, input: []const u8) !ValueTree {
-        var arena = ArenaAllocator.init(p.allocator);
-        errdefer arena.deinit();
+        var tree = ValueTree{
+            .arena = ArenaAllocator.init(p.allocator),
+            .root = null,
+        };
+        errdefer tree.deinit();
 
         // TODO: This should be an iterator, i.e. don't loop over all lines
         //       up front (unnecessary performance and memory cost). We should
@@ -150,12 +153,10 @@ pub const Parser = struct {
 
         var iter = LinesIter.init(lines);
 
-        if (iter.peekNext() == null) return ValueTree{ .arena = arena, .root = null };
+        if (iter.peekNext() != null)
+            tree.root = try p.readValue(&tree.arena.allocator, &iter); // Recursively parse
 
-        return ValueTree{
-            .arena = arena,
-            .root = try p.readValue(&arena.allocator, &iter),  // Recursively parse
-        };
+        return tree;
     }
 
     /// Split the given input into an array of lines, where each entry is a
