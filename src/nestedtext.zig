@@ -191,8 +191,10 @@ pub const Parser = struct {
             } else if (stripped[0] == '>') { // TODO: Handle expected space
                 kind = .String;
                 value = full_line[text.len - stripped.len + 2 ..];
-            } else if (false) { // TODO: Handle objects
+            } else if (parseObject(stripped)) |result| {
                 kind = .Object;
+                key = result[0];
+                value = result[1];
             } else {
                 kind = .Unrecognised;
             }
@@ -207,6 +209,15 @@ pub const Parser = struct {
         }
         std.debug.print("\n", .{});
         return lines_array;
+    }
+
+    fn parseObject(text: []const u8) ?[2][]const u8 {
+        // TODO: Handle edge cases!
+        for (text) |char, i| {
+            if (char == ' ') return null;
+            if (char == ':') return [_][]const u8{text[0..i], text[i+2..]};
+        }
+        return null;
     }
 
     fn readValue(p: Self, allocator: *Allocator, lines: *LinesIter) !Value {
@@ -318,31 +329,27 @@ test "basic list parse" {
     var root: Value = tree.root.?;
     var array: Array = root.List;
 
-    var foo: []const u8 = array.items[0].String;
-    var bar: []const u8 = array.items[1].String;
-
-    testing.expectEqualStrings("foo", foo);
-    testing.expectEqualStrings("bar", bar);
+    testing.expectEqualStrings("foo", array.items[0].String);
+    testing.expectEqualStrings("bar", array.items[1].String);
 }
 
-// test "basic object parse" {
-//     var p = Parser.init(testing.allocator, .{});
-//
-//     const s =
-//         \\ foo: 1
-//         \\ bar: False
-//     ;
-//
-//     var tree = try p.parse(s);
-//     defer tree.deinit();
-//
-//     var root: Value = tree.root.?;
-//
-//     // const foo = root.Object.get("foo").?;
-//     // const bar = root.Object.get("bar").?;
-//     // testing.expectEqualSlices(foo, "1");
-//     // testing.expectEqualSlices(bar, "False");
-// }
+test "basic object parse" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const s =
+        \\ foo: 1
+        \\ bar: False
+    ;
+
+    var tree = try p.parse(s);
+    defer tree.deinit();
+
+    var root: Value = tree.root.?;
+    var map: Map = root.Object;
+
+    testing.expectEqualStrings("1", map.get("foo").?.String);
+    testing.expectEqualStrings("False", map.get("bar").?.String);
+}
 
 // test "full parse" {
 //     var p = Parser.init(testing.allocator);
