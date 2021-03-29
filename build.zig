@@ -22,14 +22,15 @@ pub fn build(b: *Builder) void {
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&tests.step);
 
-    const exe = b.addExecutable("nestedtext", "src/nestedtext.zig");
+    const exe = b.addExecutable("nt-cli", "src/cli.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
-    exe.addPackagePath("clap", "./deps/zig-clap/clap.zig");
+    exe.addPackagePath("clap", "deps/zig-clap/clap.zig");
     exe.install();
 
     const run_cmd = exe.run();
-    run_cmd.step.dependOn(b.getInstallStep());
+    run_cmd.step.dependOn(&lib.step);
+    run_cmd.step.dependOn(&exe.step);
 
     const run_step = b.step("run", "Run the NestedText CLI");
     run_step.dependOn(&run_cmd.step);

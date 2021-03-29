@@ -9,8 +9,6 @@ const ArrayList = std.ArrayList;
 const StringHashMap = std.StringHashMap;
 const Writer = std.io.Writer;
 
-const clap = @import("clap");
-
 // -----------------------------------------------------------------------------
 // Types
 // -----------------------------------------------------------------------------
@@ -493,12 +491,4 @@ test "convert to JSON: object" {
         \\{"foo":"1","bar":"False"}
     ;
     testing.expectEqualStrings(expected_json, fbs.getWritten());
-}
-
-// -----------------------------------------------------------------------------
-// Main
-// -----------------------------------------------------------------------------
-
-pub fn main() void {
-    std.debug.print("{}", .{clap});
 }
