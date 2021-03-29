@@ -1,4 +1,5 @@
 const std = @import("std");
+const json = std.json;
 const testing = std.testing;
 const assert = std.debug.assert;
 
@@ -24,6 +25,16 @@ pub const Value = union(enum) {
     String: []const u8,
     List: Array,
     Object: Map,
+
+    pub fn toJson(value: @This(), allocator: *Allocator) !json.ValueTree {
+        var json_tree: json.ValueTree = undefined;
+        json_tree.arena = ArenaAllocator.init(allocator);
+        switch (value) {
+            .String => |inner| json_tree.root = json.Value{ .String = inner },
+            else => return error.NotImplemented,
+        }
+        return json_tree;
+    }
 };
 
 /// Return a slice corresponding to the first line of the given input,
@@ -215,7 +226,10 @@ pub const Parser = struct {
         // TODO: Handle edge cases!
         for (text) |char, i| {
             if (char == ' ') return null;
-            if (char == ':') return [_][]const u8{ text[0..i], text[i + 2 ..] };
+            if (char == ':') {
+                if (text[i + 1] != ' ') return null;
+                return [_][]const u8{ text[0..i], text[i + 2 ..] };
+            }
         }
         return null;
     }
@@ -355,55 +369,24 @@ test "basic object parse" {
     testing.expectEqualStrings("False", map.get("bar").?.String);
 }
 
-// test "full parse" {
-//     var p = Parser.init(testing.allocator);
-//
-//     const s =
-//         \\ # Contact information for our officers
-//         \\
-//         \\ president:
-//         \\     name: Katheryn McDaniel
-//         \\     address:
-//         \\         > 138 Almond Street
-//         \\         > Topeka, Kansas 20697
-//         \\     phone:
-//         \\         cell: 1-210-555-5297
-//         \\         home: 1-210-555-8470
-//         \\     email: KateMcD@aol.com
-//         \\     additional roles:
-//         \\         - board member
-//         \\
-//         \\ vice president:
-//         \\     name: Margaret Hodge
-//         \\     address:
-//         \\         > 2586 Marigold Lane
-//         \\         > Topeka, Kansas 20682
-//         \\     phone: 1-470-555-0398
-//         \\     email: margaret.hodge@ku.edu
-//         \\     additional roles:
-//         \\         - new membership task force
-//         \\         - accounting task force
-//         \\
-//         \\ treasurer:
-//         \\     name: Fumiko Purvis
-//         \\         # Fumiko's term is ending at the end of the year.
-//         \\         # She will be replaced by Merrill Eldridge.
-//         \\     address:
-//         \\         > 3636 Buffalo Ave
-//         \\         > Topeka, Kansas 20692
-//         \\     phone: 1-268-555-0280
-//         \\     email: fumiko.purvis@hotmail.com
-//         \\     additional roles:
-//         \\         - accounting task force
-//         ;
-//
-//     var tree = try p.parse(s, .{});
-//     defer tree.deinit();
-//
-//     var root = tree.root;
-//
-//     const president = root.?.Object.get("president").?;
-//
-//     const name = president.Object.get("name").?;
-//     testing.expectEqualSlices(name, "Katheryn McDaniel");
-// }
+test "dump JSON string" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const s =
+        \\ > this is a
+        \\ > multiline
+        \\ > string
+    ;
+
+    var tree = try p.parse(s);
+    defer tree.deinit();
+
+    var json_tree = try tree.root.?.toJson(testing.allocator);
+    defer json_tree.deinit();
+
+    var buffer: [128]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try json_tree.root.jsonStringify(.{}, fbs.outStream());
+    json_tree.root.dump();
+    testing.expectEqualStrings("\"this is a\\nmultiline\\nstring\"", fbs.getWritten());
+}
