@@ -411,6 +411,21 @@ test "basic parse: object" {
     testing.expectEqualStrings("False", map.get("bar").?.String);
 }
 
+test "convert to JSON: empty" {
+    var p = Parser.init(testing.allocator, .{});
+
+    var tree = try p.parse("");
+    defer tree.deinit();
+
+    var json_tree = try tree.toJson(testing.allocator);
+    defer json_tree.deinit();
+
+    var buffer: [128]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try json_tree.root.jsonStringify(.{}, fbs.outStream());
+    testing.expectEqualStrings("null", fbs.getWritten());
+}
+
 test "convert to JSON: string" {
     var p = Parser.init(testing.allocator, .{});
 
