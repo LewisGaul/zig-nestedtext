@@ -17,8 +17,18 @@ pub const ValueTree = struct {
     arena: ArenaAllocator,
     root: ?Value,
 
-    pub fn deinit(self: ValueTree) void {
+    pub fn deinit(self: @This()) void {
         self.arena.deinit();
+    }
+
+    pub fn toJson(self: @This(), allocator: *Allocator) !json.ValueTree {
+        if (self.root) |value|
+            return value.toJson(allocator)
+        else
+            return json.ValueTree{
+                .arena = ArenaAllocator.init(allocator),
+                .root = json.Value.Null,
+            };
     }
 };
 
@@ -48,7 +58,15 @@ pub const Value = union(enum) {
                 }
                 return json.Value{ .Array = json_array };
             },
-            else => return error.NotImplemented,
+            .Object => |inner| {
+                var json_map = json.ObjectMap.init(allocator);
+                var iter = inner.iterator();
+                while (iter.next()) |elem| {
+                    const json_value = try elem.value.toJsonInternal(allocator);
+                    try json_map.put(elem.key, json_value);
+                }
+                return json.Value{ .Object = json_map };
+            },
         }
     }
 };
@@ -405,7 +423,7 @@ test "convert to JSON: string" {
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var json_tree = try tree.root.?.toJson(testing.allocator);
+    var json_tree = try tree.toJson(testing.allocator);
     defer json_tree.deinit();
 
     var buffer: [128]u8 = undefined;
@@ -425,11 +443,37 @@ test "convert to JSON: list" {
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var json_tree = try tree.root.?.toJson(testing.allocator);
+    var json_tree = try tree.toJson(testing.allocator);
     defer json_tree.deinit();
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
     try json_tree.root.jsonStringify(.{}, fbs.outStream());
-    testing.expectEqualStrings("[\"foo\",\"bar\"]", fbs.getWritten());
+    const expected_json =
+        \\["foo","bar"]
+    ;
+    testing.expectEqualStrings(expected_json, fbs.getWritten());
+}
+
+test "convert to JSON: object" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const s =
+        \\ foo: 1
+        \\ bar: False
+    ;
+
+    var tree = try p.parse(s);
+    defer tree.deinit();
+
+    var json_tree = try tree.toJson(testing.allocator);
+    defer json_tree.deinit();
+
+    var buffer: [128]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try json_tree.root.jsonStringify(.{}, fbs.outStream());
+    const expected_json =
+        \\{"foo":"1","bar":"False"}
+    ;
+    testing.expectEqualStrings(expected_json, fbs.getWritten());
 }
