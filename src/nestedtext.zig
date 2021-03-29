@@ -9,6 +9,11 @@ const ArrayList = std.ArrayList;
 const StringHashMap = std.StringHashMap;
 const Writer = std.io.Writer;
 
+
+// -----------------------------------------------------------------------------
+// Types
+// -----------------------------------------------------------------------------
+
 pub const ValueTree = struct {
     arena: ArenaAllocator,
     root: ?Value,
@@ -36,6 +41,11 @@ pub const Value = union(enum) {
         return json_tree;
     }
 };
+
+
+// -----------------------------------------------------------------------------
+// Parsing logic
+// -----------------------------------------------------------------------------
 
 /// Return a slice corresponding to the first line of the given input,
 /// including the terminating newline character(s). If there is no terminating
@@ -305,6 +315,11 @@ pub const Parser = struct {
         return if (p.options.copy_strings) try allocator.dupe(u8, string) else string;
     }
 };
+
+
+// -----------------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------------
 
 test "parse empty" {
     var p = Parser.init(testing.allocator, .{});
