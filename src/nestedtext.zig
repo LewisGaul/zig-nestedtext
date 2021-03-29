@@ -43,17 +43,17 @@ pub const Value = union(enum) {
     pub fn toJson(value: @This(), allocator: *Allocator) !json.ValueTree {
         var json_tree: json.ValueTree = undefined;
         json_tree.arena = ArenaAllocator.init(allocator);
-        json_tree.root = try value.toJsonInternal(&json_tree.arena.allocator);
+        json_tree.root = try value.toJsonValue(&json_tree.arena.allocator);
         return json_tree;
     }
 
-    fn toJsonInternal(value: @This(), allocator: *Allocator) anyerror!json.Value {
+    fn toJsonValue(value: @This(), allocator: *Allocator) anyerror!json.Value {
         switch (value) {
             .String => |inner| return json.Value{ .String = inner },
             .List => |inner| {
                 var json_array = json.Array.init(allocator);
                 for (inner.items) |elem| {
-                    const json_elem = try elem.toJsonInternal(allocator);
+                    const json_elem = try elem.toJsonValue(allocator);
                     try json_array.append(json_elem);
                 }
                 return json.Value{ .Array = json_array };
@@ -62,7 +62,7 @@ pub const Value = union(enum) {
                 var json_map = json.ObjectMap.init(allocator);
                 var iter = inner.iterator();
                 while (iter.next()) |elem| {
-                    const json_value = try elem.value.toJsonInternal(allocator);
+                    const json_value = try elem.value.toJsonValue(allocator);
                     try json_map.put(elem.key, json_value);
                 }
                 return json.Value{ .Object = json_map };
