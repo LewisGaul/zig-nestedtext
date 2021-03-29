@@ -185,10 +185,10 @@ pub const Parser = struct {
                 depth = null;
             } else if (stripped[0] == '#') {
                 kind = .Comment;
-            } else if (stripped[0] == '-') { // TODO: Handle expected space
+            } else if (std.mem.startsWith(u8, stripped, "- ")) {
                 kind = .List;
                 value = stripped[2..];
-            } else if (stripped[0] == '>') { // TODO: Handle expected space
+            } else if (std.mem.startsWith(u8, stripped, "> ")) {
                 kind = .String;
                 value = full_line[text.len - stripped.len + 2 ..];
             } else if (parseObject(stripped)) |result| {
@@ -215,7 +215,7 @@ pub const Parser = struct {
         // TODO: Handle edge cases!
         for (text) |char, i| {
             if (char == ' ') return null;
-            if (char == ':') return [_][]const u8{text[0..i], text[i+2..]};
+            if (char == ':') return [_][]const u8{ text[0..i], text[i + 2 ..] };
         }
         return null;
     }
@@ -240,8 +240,7 @@ pub const Parser = struct {
         assert(lines.peekNext().?.kind == .String);
         const depth = lines.peekNext().?.depth.?;
 
-        while (lines.peekNext() != null) {
-            const line = lines.next().?;
+        while (lines.next()) |line| {
             if (line.kind != .String) return error.InvalidItem;
             if (line.depth.? > depth) return error.InvalidIndentation;
             if (line.depth.? < depth) break;
@@ -258,13 +257,13 @@ pub const Parser = struct {
         assert(lines.peekNext().?.kind == .List);
         const depth = lines.peekNext().?.depth.?;
 
-        while (lines.peekNext() != null) {
-            const line = lines.next().?;
+        while (lines.next()) |line| {
             if (line.kind != .List) return error.InvalidItem;
             if (line.depth.? > depth) return error.InvalidIndentation;
             if (line.depth.? < depth) break;
-            // TODO: Check whether string should be copied.
-            try array.append(.{ .String = line.value.? });
+            try array.append(
+                .{ .String = try p.maybeDupString(allocator, line.value.?) },
+            );
         }
         return array;
     }
@@ -276,15 +275,20 @@ pub const Parser = struct {
         assert(lines.peekNext().?.kind == .Object);
         const depth = lines.peekNext().?.depth.?;
 
-        while (lines.peekNext() != null) {
-            const line = lines.next().?;
+        while (lines.next()) |line| {
             if (line.kind != .Object) return error.InvalidItem;
             if (line.depth.? > depth) return error.InvalidIndentation;
             if (line.depth.? < depth) break;
-            // TODO: Check whether strings should be copied.
-            try map.put(line.key.?, .{ .String = line.value.? });
+            try map.put(
+                try p.maybeDupString(allocator, line.key.?),
+                .{ .String = try p.maybeDupString(allocator, line.value.?) },
+            );
         }
         return map;
+    }
+
+    fn maybeDupString(p: Self, allocator: *Allocator, string: []const u8) ![]const u8 {
+        return if (p.options.copy_strings) try allocator.dupe(u8, string) else string;
     }
 };
 
