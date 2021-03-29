@@ -9,7 +9,6 @@ const ArrayList = std.ArrayList;
 const StringHashMap = std.StringHashMap;
 const Writer = std.io.Writer;
 
-
 // -----------------------------------------------------------------------------
 // Types
 // -----------------------------------------------------------------------------
@@ -34,14 +33,25 @@ pub const Value = union(enum) {
     pub fn toJson(value: @This(), allocator: *Allocator) !json.ValueTree {
         var json_tree: json.ValueTree = undefined;
         json_tree.arena = ArenaAllocator.init(allocator);
-        switch (value) {
-            .String => |inner| json_tree.root = json.Value{ .String = inner },
-            else => return error.NotImplemented,
-        }
+        json_tree.root = try value.toJsonInternal(&json_tree.arena.allocator);
         return json_tree;
     }
-};
 
+    fn toJsonInternal(value: @This(), allocator: *Allocator) anyerror!json.Value {
+        switch (value) {
+            .String => |inner| return json.Value{ .String = inner },
+            .List => |inner| {
+                var json_array = json.Array.init(allocator);
+                for (inner.items) |elem| {
+                    const json_elem = try elem.toJsonInternal(allocator);
+                    try json_array.append(json_elem);
+                }
+                return json.Value{ .Array = json_array };
+            },
+            else => return error.NotImplemented,
+        }
+    }
+};
 
 // -----------------------------------------------------------------------------
 // Parsing logic
@@ -316,7 +326,6 @@ pub const Parser = struct {
     }
 };
 
-
 // -----------------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------------
@@ -330,7 +339,7 @@ test "parse empty" {
     testing.expectEqual(@as(?Value, null), tree.root);
 }
 
-test "basic string parse" {
+test "basic parse: string" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
@@ -348,7 +357,7 @@ test "basic string parse" {
     testing.expectEqualStrings("this is a\nmultiline\nstring", string);
 }
 
-test "basic list parse" {
+test "basic parse: list" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
@@ -366,7 +375,7 @@ test "basic list parse" {
     testing.expectEqualStrings("bar", array.items[1].String);
 }
 
-test "basic object parse" {
+test "basic parse: object" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
@@ -384,7 +393,7 @@ test "basic object parse" {
     testing.expectEqualStrings("False", map.get("bar").?.String);
 }
 
-test "dump JSON string" {
+test "convert to JSON: string" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
@@ -402,6 +411,25 @@ test "dump JSON string" {
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
     try json_tree.root.jsonStringify(.{}, fbs.outStream());
-    json_tree.root.dump();
     testing.expectEqualStrings("\"this is a\\nmultiline\\nstring\"", fbs.getWritten());
+}
+
+test "convert to JSON: list" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const s =
+        \\ - foo
+        \\ - bar
+    ;
+
+    var tree = try p.parse(s);
+    defer tree.deinit();
+
+    var json_tree = try tree.root.?.toJson(testing.allocator);
+    defer json_tree.deinit();
+
+    var buffer: [128]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try json_tree.root.jsonStringify(.{}, fbs.outStream());
+    testing.expectEqualStrings("[\"foo\",\"bar\"]", fbs.getWritten());
 }
