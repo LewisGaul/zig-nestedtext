@@ -5,7 +5,7 @@ A NestedText parser written in Zig 0.7 targeting [NestedText v1.3](https://neste
 
 ## Building and Usage
 
-This library has no external dependencies.
+This library has no external dependencies. The CLI tool depends on `Clap` (included as a git submodule under `deps/`).
 
 Run `zig build` to build the static library `libnestedtext.a` under `zig-cache/lib/`, which can then be linked with your program.
 
