@@ -5,6 +5,7 @@ const clap = @import("clap");
 const nestedtext = @import("nestedtext.zig");
 
 const WriteError = std.os.WriteError;
+const File = std.fs.File;
 
 // -----------------------------------------------------------------------------
 // Main
@@ -41,28 +42,27 @@ fn mainWorker() WriteError!u8 {
         return 0;
     }
 
-    var input: []const u8 = undefined;
-    var buffer: [1024]u8 = undefined;
+    var input_file: File = undefined;
     if (args.option("--infile")) |infile| {
-        const file = std.fs.cwd().openFile(infile, .{}) catch {
+        input_file = std.fs.cwd().openFile(infile, .{}) catch {
             try stderr.print("Failed to open file {s}\n", .{infile});
             return 1;
         };
-        defer file.close();
-        const read_bytes = file.readAll(&buffer) catch {
-            try stderr.print("Failed to read file {s}\n", .{infile});
-            return 1;
-        };
-        if (read_bytes == buffer.len) {
-            try stderr.print(
-                "File {s} exceeds max length ({d} bytes)\n",
-                .{ infile, buffer.len },
-            );
-            return 1;
-        } else
-            input = buffer[0..read_bytes];
     } else {
-        try stderr.writeAll("Reading from stdin not yet implemented\n");
+        input_file = std.io.getStdIn();
+    }
+    defer input_file.close();
+
+    var buffer: [1024]u8 = undefined;
+    const input_len = input_file.readAll(&buffer) catch {
+        try stderr.writeAll("Failed to read file\n");
+        return 1;
+    };
+    if (input_len == buffer.len) {
+        try stderr.print(
+            "File exceeds max length ({d} bytes)\n",
+            .{buffer.len - 1},
+        );
         return 1;
     }
 
@@ -72,7 +72,7 @@ fn mainWorker() WriteError!u8 {
     }
 
     var parser = nestedtext.Parser.init(std.heap.page_allocator, .{});
-    const tree = parser.parse(input) catch {
+    const tree = parser.parse(buffer[0..input_len]) catch {
         try stderr.writeAll("Failed to parse file as NestedText\n");
         return 1;
     };
