@@ -214,7 +214,6 @@ pub const Parser = struct {
         var lines_array = ArrayList(Line).init(p.allocator);
         var buf_idx: usize = 0;
         var lineno: usize = 0;
-        std.debug.print("\n", .{});
         while (readline(input[buf_idx..])) |full_line| {
             buf_idx += full_line.len;
             const text = std.mem.trimRight(u8, full_line, &[_]u8{ '\n', '\r' });
@@ -224,7 +223,6 @@ pub const Parser = struct {
             var key: ?[]const u8 = null;
             var value: ?[]const u8 = null;
 
-            std.debug.print("Line {}: {s}\n", .{ lineno, text });
 
             // TODO: Check leading space is entirely made up of space characters.
             const stripped = std.mem.trimLeft(u8, text, &[_]u8{ ' ', '\t' });
@@ -256,7 +254,6 @@ pub const Parser = struct {
                 .value = value,
             });
         }
-        std.debug.print("\n", .{});
         return lines_array;
     }
 
