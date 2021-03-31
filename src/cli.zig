@@ -12,7 +12,6 @@ const File = std.fs.File;
 // -----------------------------------------------------------------------------
 
 fn mainWorker() WriteError!u8 {
-    var stdout = std.io.getStdOut().writer();
     var stderr = std.io.getStdErr().writer();
 
     // First we specify what parameters our program can take.
@@ -51,7 +50,6 @@ fn mainWorker() WriteError!u8 {
     } else {
         input_file = std.io.getStdIn();
     }
-    defer input_file.close();
 
     var buffer: [1024]u8 = undefined;
     const input_len = input_file.readAll(&buffer) catch {
@@ -66,9 +64,14 @@ fn mainWorker() WriteError!u8 {
         return 1;
     }
 
+    var output_file: File = undefined;
     if (args.option("--outfile")) |outfile| {
-        try stderr.writeAll("Writing to file not yet implemented\n");
-        return 1;
+        output_file = std.fs.cwd().createFile(outfile, .{}) catch {
+            try stderr.print("Failed to create file {s}\n", .{outfile});
+            return 1;
+        };
+    } else {
+        output_file = std.io.getStdOut();
     }
 
     var parser = nestedtext.Parser.init(std.heap.page_allocator, .{});
@@ -82,7 +85,7 @@ fn mainWorker() WriteError!u8 {
         return 1;
     };
     defer json_tree.deinit();
-    try json_tree.root.jsonStringify(.{}, stdout);
+    try json_tree.root.jsonStringify(.{}, output_file.writer());
 
     return 0;
 }
