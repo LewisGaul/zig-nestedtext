@@ -51,18 +51,17 @@ fn mainWorker() WriteError!u8 {
         input_file = std.io.getStdIn();
     }
 
-    var buffer: [1024]u8 = undefined;
-    const input_len = input_file.readAll(&buffer) catch {
-        try stderr.writeAll("Failed to read file\n");
-        return 1;
+    const max_size = 1024 * 1024 * 1024; // 1GB
+    const input = input_file.readToEndAlloc(std.heap.page_allocator, max_size) catch |err| switch (err) {
+        error.FileTooBig => {
+            try stderr.print("Failed to read file, {s} - 1GB max\n", .{@errorName(err)});
+            return 1;
+        },
+        else => {
+            try stderr.print("Failed to read file, {s}\n", .{@errorName(err)});
+            return 1;
+        },
     };
-    if (input_len == buffer.len) {
-        try stderr.print(
-            "File exceeds max length ({d} bytes)\n",
-            .{buffer.len - 1},
-        );
-        return 1;
-    }
 
     var output_file: File = undefined;
     if (args.option("--outfile")) |outfile| {
@@ -75,7 +74,7 @@ fn mainWorker() WriteError!u8 {
     }
 
     var parser = nestedtext.Parser.init(std.heap.page_allocator, .{});
-    const tree = parser.parse(buffer[0..input_len]) catch {
+    const tree = parser.parse(input) catch {
         try stderr.writeAll("Failed to parse file as NestedText\n");
         return 1;
     };
