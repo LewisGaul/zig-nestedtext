@@ -131,8 +131,8 @@ pub const Parser = struct {
         text: []const u8,
         lineno: usize,
         kind: LineType,
-        depth: ?usize,
-        key: ?[]const u8,
+        depth: usize,
+        key: []const u8,
         value: ?[]const u8,
     };
 
@@ -219,17 +219,15 @@ pub const Parser = struct {
             const text = std.mem.trimRight(u8, full_line, &[_]u8{ '\n', '\r' });
             lineno += 1;
             var kind: LineType = undefined;
-            var depth: ?usize = undefined;
-            var key: ?[]const u8 = null;
+            var depth: usize = undefined;
+            var key: []const u8 = undefined;
             var value: ?[]const u8 = null;
-
 
             // TODO: Check leading space is entirely made up of space characters.
             const stripped = std.mem.trimLeft(u8, text, &[_]u8{ ' ', '\t' });
             depth = text.len - stripped.len;
             if (stripped.len == 0) {
                 kind = .Blank;
-                depth = null;
             } else if (stripped[0] == '#') {
                 kind = .Comment;
             } else if (std.mem.startsWith(u8, stripped, "- ")) {
@@ -240,8 +238,8 @@ pub const Parser = struct {
                 value = full_line[text.len - stripped.len + 2 ..];
             } else if (parseObject(stripped)) |result| {
                 kind = .Object;
-                key = result[0];
-                value = result[1];
+                key = result[0].?;
+                value = result[1]; // May be null if value on following line(s)
             } else {
                 kind = .Unrecognised;
             }
@@ -257,13 +255,16 @@ pub const Parser = struct {
         return lines_array;
     }
 
-    fn parseObject(text: []const u8) ?[2][]const u8 {
+    fn parseObject(text: []const u8) ?[2]?[]const u8 {
         // TODO: Handle edge cases!
         for (text) |char, i| {
             if (char == ' ') return null;
             if (char == ':') {
-                if (text[i + 1] != ' ') return null;
-                return [_][]const u8{ text[0..i], text[i + 2 ..] };
+                // Assume first colon found is the key-value separator, and
+                // expect a space character to follow if anything.
+                if (text.len > i + 1 and text[i + 1] != ' ') return null;
+                const value = if (text.len > i + 2) text[i + 2 ..] else null;
+                return [_]?[]const u8{ text[0..i], value };
             }
         }
         return null;
@@ -277,7 +278,7 @@ pub const Parser = struct {
             .List => .{ .List = try p.readList(allocator, lines) },
             .Object => .{ .Object = try p.readObject(allocator, lines) },
             .Unrecognised => return error.UnrecognisedLine,
-            .Blank, .Comment => unreachable,
+            .Blank, .Comment => unreachable, // Skipped by iterator
         };
     }
 
@@ -287,12 +288,12 @@ pub const Parser = struct {
         var writer = buffer.writer();
 
         assert(lines.peekNext().?.kind == .String);
-        const depth = lines.peekNext().?.depth.?;
+        const depth = lines.peekNext().?.depth;
 
         while (lines.next()) |line| {
             if (line.kind != .String) return error.InvalidItem;
-            if (line.depth.? > depth) return error.InvalidIndentation;
-            if (line.depth.? < depth) break;
+            if (line.depth > depth) return error.InvalidIndentation;
+            if (line.depth < depth) break;
             // String copied as it's not contiguous in-file.
             try writer.writeAll(line.value.?);
         }
@@ -304,12 +305,12 @@ pub const Parser = struct {
         errdefer array.deinit();
 
         assert(lines.peekNext().?.kind == .List);
-        const depth = lines.peekNext().?.depth.?;
+        const depth = lines.peekNext().?.depth;
 
         while (lines.next()) |line| {
             if (line.kind != .List) return error.InvalidItem;
-            if (line.depth.? > depth) return error.InvalidIndentation;
-            if (line.depth.? < depth) break;
+            if (line.depth > depth) return error.InvalidIndentation;
+            if (line.depth < depth) break;
             try array.append(
                 .{ .String = try p.maybeDupString(allocator, line.value.?) },
             );
@@ -322,16 +323,20 @@ pub const Parser = struct {
         errdefer map.deinit();
 
         assert(lines.peekNext().?.kind == .Object);
-        const depth = lines.peekNext().?.depth.?;
+        const depth = lines.peekNext().?.depth;
 
         while (lines.next()) |line| {
             if (line.kind != .Object) return error.InvalidItem;
-            if (line.depth.? > depth) return error.InvalidIndentation;
-            if (line.depth.? < depth) break;
-            try map.put(
-                try p.maybeDupString(allocator, line.key.?),
-                .{ .String = try p.maybeDupString(allocator, line.value.?) },
-            );
+            if (line.depth > depth) return error.InvalidIndentation;
+            if (line.depth < depth) break;
+            if (line.value) |value| {
+                try map.put(
+                    try p.maybeDupString(allocator, line.key),
+                    .{ .String = try p.maybeDupString(allocator, value) },
+                );
+            } else {
+                break;
+            }
         }
         return map;
     }
@@ -406,6 +411,25 @@ test "basic parse: object" {
 
     testing.expectEqualStrings("1", map.get("foo").?.String);
     testing.expectEqualStrings("False", map.get("bar").?.String);
+}
+
+test "nested parse: object inside object" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const s =
+        \\ foo: 1
+        \\ bar:
+        \\   nest1: 2
+        \\   nest2: 3
+    ;
+
+    var tree = try p.parse(s);
+    defer tree.deinit();
+
+    var root: Value = tree.root.?;
+    var base_obj: Map = root.Object;
+
+    testing.expectEqualStrings("1", base_obj.get("foo").?.String);
 }
 
 test "convert to JSON: empty" {
