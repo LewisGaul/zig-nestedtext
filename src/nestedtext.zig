@@ -6,7 +6,7 @@ const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const ArrayList = std.ArrayList;
-const StringHashMap = std.StringHashMap;
+const StringArrayHashMap = std.StringArrayHashMap;
 const Writer = std.io.Writer;
 
 // -----------------------------------------------------------------------------
@@ -32,7 +32,7 @@ pub const ValueTree = struct {
     }
 };
 
-pub const Map = StringHashMap(Value); // TODO: Use ordered hashmap?
+pub const Map = StringArrayHashMap(Value);
 pub const Array = ArrayList(Value);
 
 pub const Value = union(enum) {
