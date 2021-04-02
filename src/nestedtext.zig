@@ -310,9 +310,9 @@ pub const Parser = struct {
             if (line.kind != .String) return error.InvalidItem;
             const str_line = line.kind.String;
             if (str_line.depth > depth) return error.InvalidIndentation;
-            if (str_line.depth < depth) break;
             // String must be copied as it's not contiguous in-file.
             try writer.writeAll(str_line.value);
+            if (lines.peekNextDepth() != null and lines.peekNextDepth().? < depth) break;
         }
         return buffer.items;
     }
@@ -328,10 +328,10 @@ pub const Parser = struct {
             if (line.kind != .List) return error.InvalidItem;
             const list_line = line.kind.List;
             if (list_line.depth > depth) return error.InvalidIndentation;
-            if (list_line.depth < depth) break;
             try array.append(
                 .{ .String = try p.maybeDupString(allocator, list_line.value.?) },
             );
+            if (lines.peekNextDepth() != null and lines.peekNextDepth().? < depth) break;
         }
         return array;
     }
@@ -588,26 +588,26 @@ test "convert to JSON: list inside object" {
     testing.expectEqualStrings(expected_json, fbs.getWritten());
 }
 
-// test "convert to JSON: multiline string inside object" {
-//     var p = Parser.init(testing.allocator, .{});
+test "convert to JSON: multiline string inside object" {
+    var p = Parser.init(testing.allocator, .{});
 
-//     const s =
-//         \\ foo:
-//         \\   > multi
-//         \\   > line
-//     ;
+    const s =
+        \\ foo:
+        \\   > multi
+        \\   > line
+    ;
 
-//     var tree = try p.parse(s);
-//     defer tree.deinit();
+    var tree = try p.parse(s);
+    defer tree.deinit();
 
-//     var json_tree = try tree.toJson(testing.allocator);
-//     defer json_tree.deinit();
+    var json_tree = try tree.toJson(testing.allocator);
+    defer json_tree.deinit();
 
-//     var buffer: [128]u8 = undefined;
-//     var fbs = std.io.fixedBufferStream(&buffer);
-//     try json_tree.root.jsonStringify(.{}, fbs.outStream());
-//     const expected_json =
-//         \\{"foo":"multi\\nline"}
-//     ;
-//     testing.expectEqualStrings(expected_json, fbs.getWritten());
-// }
+    var buffer: [128]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try json_tree.root.jsonStringify(.{}, fbs.outStream());
+    const expected_json =
+        \\{"foo":"multi\nline"}
+    ;
+    testing.expectEqualStrings(expected_json, fbs.getWritten());
+}

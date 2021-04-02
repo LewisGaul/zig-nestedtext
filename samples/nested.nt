@@ -6,7 +6,6 @@ B:
 F:
   - G
   - H
-# The following is not yet handled
-#I:
-#  > J
-#  > K
+I:
+  > J
+  > K
