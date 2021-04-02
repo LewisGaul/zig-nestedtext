@@ -32,7 +32,7 @@ pub const ValueTree = struct {
     }
 };
 
-pub const Map = StringHashMap(Value);
+pub const Map = StringHashMap(Value);  // TODO: Use ordered hashmap?
 pub const Array = ArrayList(Value);
 
 pub const Value = union(enum) {
@@ -47,7 +47,7 @@ pub const Value = union(enum) {
         return json_tree;
     }
 
-    fn toJsonValue(value: @This(), allocator: *Allocator) anyerror!json.Value {
+    pub fn toJsonValue(value: @This(), allocator: *Allocator) anyerror!json.Value {
         switch (value) {
             .String => |inner| return json.Value{ .String = inner },
             .List => |inner| {
@@ -347,7 +347,6 @@ pub const Parser = struct {
             if (line.kind != .Object) return error.InvalidItem;
             const obj_line = line.kind.Object;
             if (obj_line.depth > depth) return error.InvalidIndentation;
-            if (obj_line.depth < depth) break;
             var value: Value = undefined;
             if (obj_line.value) |str| {
                 value = .{ .String = try p.maybeDupString(allocator, str) };
@@ -357,6 +356,7 @@ pub const Parser = struct {
                 value = .{ .String = "" };
             }
             try map.put(try p.maybeDupString(allocator, obj_line.key), value);
+            if (lines.peekNextDepth() != null and lines.peekNextDepth().? < depth) break;
         }
         return map;
     }
@@ -431,6 +431,29 @@ test "basic parse: object" {
 
     testing.expectEqualStrings("1", map.get("foo").?.String);
     testing.expectEqualStrings("False", map.get("bar").?.String);
+}
+
+test "nested parse: object inside object" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const s =
+        \\ foo: 1
+        \\ bar:
+        \\   nest1: 2
+        \\   nest2: 3
+        \\ baz:
+    ;
+
+    var tree = try p.parse(s);
+    defer tree.deinit();
+
+    var root: Value = tree.root.?;
+    var map: Map = root.Object;
+
+    testing.expectEqualStrings("1", map.get("foo").?.String);
+    testing.expectEqualStrings("", map.get("baz").?.String);
+    testing.expectEqualStrings("2", map.get("bar").?.Object.get("nest1").?.String);
+    testing.expectEqualStrings("3", map.get("bar").?.Object.get("nest2").?.String);
 }
 
 test "convert to JSON: empty" {
@@ -509,20 +532,21 @@ test "convert to JSON: object" {
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
     try json_tree.root.jsonStringify(.{}, fbs.outStream());
+    // TODO: Order of objects not yet guaranteed.
     const expected_json =
         \\{"foo":"1","bar":"False"}
     ;
     testing.expectEqualStrings(expected_json, fbs.getWritten());
 }
 
+
 test "convert to JSON: object inside object" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ foo: 1
         \\ bar:
-        \\   nest1: 2
-        \\   nest2: 3
+        \\   nest1: 1
+        \\   nest2: 2
     ;
 
     var tree = try p.parse(s);
@@ -535,7 +559,55 @@ test "convert to JSON: object inside object" {
     var fbs = std.io.fixedBufferStream(&buffer);
     try json_tree.root.jsonStringify(.{}, fbs.outStream());
     const expected_json =
-        \\{"foo":"1","bar":{"nest1":"2","nest2":"3"}}
+        \\{"bar":{"nest1":"1","nest2":"2"}}
     ;
     testing.expectEqualStrings(expected_json, fbs.getWritten());
 }
+
+test "convert to JSON: list inside object" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const s =
+        \\ bar:
+        \\   - nest1
+        \\   - nest2
+    ;
+
+    var tree = try p.parse(s);
+    defer tree.deinit();
+
+    var json_tree = try tree.toJson(testing.allocator);
+    defer json_tree.deinit();
+
+    var buffer: [128]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try json_tree.root.jsonStringify(.{}, fbs.outStream());
+    const expected_json =
+        \\{"bar":["nest1","nest2"]}
+    ;
+    testing.expectEqualStrings(expected_json, fbs.getWritten());
+}
+
+// test "convert to JSON: multiline string inside object" {
+//     var p = Parser.init(testing.allocator, .{});
+
+//     const s =
+//         \\ foo:
+//         \\   > multi
+//         \\   > line
+//     ;
+
+//     var tree = try p.parse(s);
+//     defer tree.deinit();
+
+//     var json_tree = try tree.toJson(testing.allocator);
+//     defer json_tree.deinit();
+
+//     var buffer: [128]u8 = undefined;
+//     var fbs = std.io.fixedBufferStream(&buffer);
+//     try json_tree.root.jsonStringify(.{}, fbs.outStream());
+//     const expected_json =
+//         \\{"foo":"multi\\nline"}
+//     ;
+//     testing.expectEqualStrings(expected_json, fbs.getWritten());
+// }

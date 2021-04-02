@@ -1,0 +1,12 @@
+A: 1
+B:
+  C: 2
+  D:
+    E: 3
+F:
+  - G
+  - H
+# The following is not yet handled
+#I:
+#  > J
+#  > K

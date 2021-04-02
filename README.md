@@ -11,8 +11,8 @@ Run `zig build` to build the static library `libnestedtext.a` under `zig-cache/l
 
 This will also create an executable CLI program `nt-cli` under `zig-cache/bin/`. This can be used to convert NestedText to JSON, for example:  
 ```
-$ nt-cli -f samples/basic-list.nt
-["foo","bar","string with spaces"]
+$ nt-cli -f samples/nested.nt
+{"F":["G","H"],"A":"1","B":{"C":"2","D":{"E":"3"}}}
 ```
 
 Run the tests with `zig build test`.
