@@ -143,16 +143,26 @@ pub const Parser = struct {
             return self;
         }
 
-        pub fn peekNext(self: LinesIter) ?Line {
-            if (self.next_idx >= self.len()) return null;
-            return self.lines.items[self.next_idx];
-        }
-
         pub fn next(self: *LinesIter) ?Line {
             if (self.next_idx >= self.len()) return null;
             const line = self.lines.items[self.next_idx];
             self.advanceToNextContentLine();
             return line;
+        }
+
+        pub fn peekNext(self: LinesIter) ?Line {
+            if (self.next_idx >= self.len()) return null;
+            return self.lines.items[self.next_idx];
+        }
+
+        pub fn peekNextDepth(self: LinesIter) ?usize {
+            if (self.peekNext() == null) return null;
+            return switch (self.peekNext().?.kind) {
+                .String => |k| k.depth,
+                .List => |k| k.depth,
+                .Object => |k| k.depth,
+                else => null,
+            };
         }
 
         fn len(self: LinesIter) usize {
@@ -276,7 +286,7 @@ pub const Parser = struct {
         return null;
     }
 
-    fn readValue(p: Self, allocator: *Allocator, lines: *LinesIter) !Value {
+    fn readValue(p: Self, allocator: *Allocator, lines: *LinesIter) anyerror!Value {
         // Call read<type>() with the first line of the type queued up as the
         // next line in the lines iterator.
         return switch (lines.peekNext().?.kind) {
@@ -298,11 +308,11 @@ pub const Parser = struct {
 
         while (lines.next()) |line| {
             if (line.kind != .String) return error.InvalidItem;
-            const string = line.kind.String;
-            if (string.depth > depth) return error.InvalidIndentation;
-            if (string.depth < depth) break;
+            const str_line = line.kind.String;
+            if (str_line.depth > depth) return error.InvalidIndentation;
+            if (str_line.depth < depth) break;
             // String must be copied as it's not contiguous in-file.
-            try writer.writeAll(string.value);
+            try writer.writeAll(str_line.value);
         }
         return buffer.items;
     }
@@ -316,17 +326,17 @@ pub const Parser = struct {
 
         while (lines.next()) |line| {
             if (line.kind != .List) return error.InvalidItem;
-            const list = line.kind.List;
-            if (list.depth > depth) return error.InvalidIndentation;
-            if (list.depth < depth) break;
+            const list_line = line.kind.List;
+            if (list_line.depth > depth) return error.InvalidIndentation;
+            if (list_line.depth < depth) break;
             try array.append(
-                .{ .String = try p.maybeDupString(allocator, list.value.?) },
+                .{ .String = try p.maybeDupString(allocator, list_line.value.?) },
             );
         }
         return array;
     }
 
-    fn readObject(p: Self, allocator: *Allocator, lines: *LinesIter) !Map {
+    fn readObject(p: Self, allocator: *Allocator, lines: *LinesIter) anyerror!Map {
         var map = Map.init(allocator);
         errdefer map.deinit();
 
@@ -335,17 +345,18 @@ pub const Parser = struct {
 
         while (lines.next()) |line| {
             if (line.kind != .Object) return error.InvalidItem;
-            const object = line.kind.Object;
-            if (object.depth > depth) return error.InvalidIndentation;
-            if (object.depth < depth) break;
-            if (object.value) |value| {
-                try map.put(
-                    try p.maybeDupString(allocator, object.key),
-                    .{ .String = try p.maybeDupString(allocator, value) },
-                );
+            const obj_line = line.kind.Object;
+            if (obj_line.depth > depth) return error.InvalidIndentation;
+            if (obj_line.depth < depth) break;
+            var value: Value = undefined;
+            if (obj_line.value) |str| {
+                value = .{ .String = try p.maybeDupString(allocator, str) };
+            } else if (lines.peekNextDepth() != null and lines.peekNextDepth().? > depth) {
+                value = try p.readValue(allocator, lines);
             } else {
-                break;
+                value = .{ .String = "" };
             }
+            try map.put(try p.maybeDupString(allocator, obj_line.key), value);
         }
         return map;
     }
@@ -420,25 +431,6 @@ test "basic parse: object" {
 
     testing.expectEqualStrings("1", map.get("foo").?.String);
     testing.expectEqualStrings("False", map.get("bar").?.String);
-}
-
-test "nested parse: object inside object" {
-    var p = Parser.init(testing.allocator, .{});
-
-    const s =
-        \\ foo: 1
-        \\ bar:
-        \\   nest1: 2
-        \\   nest2: 3
-    ;
-
-    var tree = try p.parse(s);
-    defer tree.deinit();
-
-    var root: Value = tree.root.?;
-    var base_obj: Map = root.Object;
-
-    testing.expectEqualStrings("1", base_obj.get("foo").?.String);
 }
 
 test "convert to JSON: empty" {
@@ -519,6 +511,31 @@ test "convert to JSON: object" {
     try json_tree.root.jsonStringify(.{}, fbs.outStream());
     const expected_json =
         \\{"foo":"1","bar":"False"}
+    ;
+    testing.expectEqualStrings(expected_json, fbs.getWritten());
+}
+
+test "convert to JSON: object inside object" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const s =
+        \\ foo: 1
+        \\ bar:
+        \\   nest1: 2
+        \\   nest2: 3
+    ;
+
+    var tree = try p.parse(s);
+    defer tree.deinit();
+
+    var json_tree = try tree.toJson(testing.allocator);
+    defer json_tree.deinit();
+
+    var buffer: [128]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try json_tree.root.jsonStringify(.{}, fbs.outStream());
+    const expected_json =
+        \\{"foo":"1","bar":{"nest1":"2","nest2":"3"}}
     ;
     testing.expectEqualStrings(expected_json, fbs.getWritten());
 }
