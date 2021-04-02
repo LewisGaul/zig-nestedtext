@@ -118,12 +118,12 @@ pub const Parser = struct {
         copy_strings: bool = true,
     };
 
-    const LineType = enum {
+    const LineType = union(enum) {
         Blank,
         Comment,
-        String,
-        List,
-        Object,
+        String: struct { depth: usize, value: []const u8 },
+        List: struct { depth: usize, value: ?[]const u8 },
+        Object: struct { depth: usize, key: []const u8, value: ?[]const u8 },
         Unrecognised,
     };
 
@@ -131,9 +131,6 @@ pub const Parser = struct {
         text: []const u8,
         lineno: usize,
         kind: LineType,
-        depth: usize,
-        key: []const u8,
-        value: ?[]const u8,
     };
 
     const LinesIter = struct {
@@ -219,38 +216,47 @@ pub const Parser = struct {
             const text = std.mem.trimRight(u8, full_line, &[_]u8{ '\n', '\r' });
             lineno += 1;
             var kind: LineType = undefined;
-            var depth: usize = undefined;
-            var key: []const u8 = undefined;
-            var value: ?[]const u8 = null;
 
             // TODO: Check leading space is entirely made up of space characters.
             const stripped = std.mem.trimLeft(u8, text, &[_]u8{ ' ', '\t' });
-            depth = text.len - stripped.len;
+            const depth = text.len - stripped.len;
             if (stripped.len == 0) {
                 kind = .Blank;
             } else if (stripped[0] == '#') {
                 kind = .Comment;
-            } else if (std.mem.startsWith(u8, stripped, "- ")) {
-                kind = .List;
-                value = stripped[2..];
             } else if (std.mem.startsWith(u8, stripped, "> ")) {
-                kind = .String;
-                value = full_line[text.len - stripped.len + 2 ..];
+                kind = .{
+                    .String = .{
+                        .depth = depth,
+                        .value = full_line[text.len - stripped.len + 2 ..],
+                    },
+                };
+            } else if (std.mem.startsWith(u8, stripped, "- ")) {
+                kind = .{
+                    .List = .{
+                        .depth = depth,
+                        .value = stripped[2..],
+                    },
+                };
             } else if (parseObject(stripped)) |result| {
-                kind = .Object;
-                key = result[0].?;
-                value = result[1]; // May be null if value on following line(s)
+                kind = .{
+                    .Object = .{
+                        .depth = depth,
+                        .key = result[0].?,
+                        // May be null if the value is on the following line(s).
+                        .value = result[1],
+                    },
+                };
             } else {
                 kind = .Unrecognised;
             }
-            try lines_array.append(Line{
-                .text = text,
-                .lineno = lineno,
-                .kind = kind,
-                .depth = depth,
-                .key = key,
-                .value = value,
-            });
+            try lines_array.append(
+                Line{
+                    .text = text,
+                    .lineno = lineno,
+                    .kind = kind,
+                },
+            );
         }
         return lines_array;
     }
@@ -288,14 +294,15 @@ pub const Parser = struct {
         var writer = buffer.writer();
 
         assert(lines.peekNext().?.kind == .String);
-        const depth = lines.peekNext().?.depth;
+        const depth = lines.peekNext().?.kind.String.depth;
 
         while (lines.next()) |line| {
             if (line.kind != .String) return error.InvalidItem;
-            if (line.depth > depth) return error.InvalidIndentation;
-            if (line.depth < depth) break;
-            // String copied as it's not contiguous in-file.
-            try writer.writeAll(line.value.?);
+            const string = line.kind.String;
+            if (string.depth > depth) return error.InvalidIndentation;
+            if (string.depth < depth) break;
+            // String must be copied as it's not contiguous in-file.
+            try writer.writeAll(string.value);
         }
         return buffer.items;
     }
@@ -305,14 +312,15 @@ pub const Parser = struct {
         errdefer array.deinit();
 
         assert(lines.peekNext().?.kind == .List);
-        const depth = lines.peekNext().?.depth;
+        const depth = lines.peekNext().?.kind.List.depth;
 
         while (lines.next()) |line| {
             if (line.kind != .List) return error.InvalidItem;
-            if (line.depth > depth) return error.InvalidIndentation;
-            if (line.depth < depth) break;
+            const list = line.kind.List;
+            if (list.depth > depth) return error.InvalidIndentation;
+            if (list.depth < depth) break;
             try array.append(
-                .{ .String = try p.maybeDupString(allocator, line.value.?) },
+                .{ .String = try p.maybeDupString(allocator, list.value.?) },
             );
         }
         return array;
@@ -323,15 +331,16 @@ pub const Parser = struct {
         errdefer map.deinit();
 
         assert(lines.peekNext().?.kind == .Object);
-        const depth = lines.peekNext().?.depth;
+        const depth = lines.peekNext().?.kind.Object.depth;
 
         while (lines.next()) |line| {
             if (line.kind != .Object) return error.InvalidItem;
-            if (line.depth > depth) return error.InvalidIndentation;
-            if (line.depth < depth) break;
-            if (line.value) |value| {
+            const object = line.kind.Object;
+            if (object.depth > depth) return error.InvalidIndentation;
+            if (object.depth < depth) break;
+            if (object.value) |value| {
                 try map.put(
-                    try p.maybeDupString(allocator, line.key),
+                    try p.maybeDupString(allocator, object.key),
                     .{ .String = try p.maybeDupString(allocator, value) },
                 );
             } else {
