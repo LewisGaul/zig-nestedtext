@@ -32,7 +32,7 @@ pub const ValueTree = struct {
     }
 };
 
-pub const Map = StringHashMap(Value);  // TODO: Use ordered hashmap?
+pub const Map = StringHashMap(Value); // TODO: Use ordered hashmap?
 pub const Array = ArrayList(Value);
 
 pub const Value = union(enum) {
@@ -234,18 +234,18 @@ pub const Parser = struct {
                 kind = .Blank;
             } else if (stripped[0] == '#') {
                 kind = .Comment;
-            } else if (std.mem.startsWith(u8, stripped, "> ")) {
+            } else if (parseString(stripped)) |index| {
                 kind = .{
                     .String = .{
                         .depth = depth,
-                        .value = full_line[text.len - stripped.len + 2 ..],
+                        .value = full_line[text.len - stripped.len + index ..],
                     },
                 };
-            } else if (std.mem.startsWith(u8, stripped, "- ")) {
+            } else if (parseList(stripped)) |value| {
                 kind = .{
                     .List = .{
                         .depth = depth,
-                        .value = stripped[2..],
+                        .value = if (value.len > 0) value else null,
                     },
                 };
             } else if (parseObject(stripped)) |result| {
@@ -269,6 +269,22 @@ pub const Parser = struct {
             );
         }
         return lines_array;
+    }
+
+    fn parseString(text: []const u8) ?usize {
+        assert(text.len > 0);
+        if (text[0] != '>') return null;
+        if (text.len == 1) return 1;
+        if (text[1] == ' ') return 2;
+        return null;
+    }
+
+    fn parseList(text: []const u8) ?[]const u8 {
+        assert(text.len > 0);
+        if (text[0] != '-') return null;
+        if (text.len == 1) return "";
+        if (text[1] == ' ') return text[2..];
+        return null;
     }
 
     fn parseObject(text: []const u8) ?[2]?[]const u8 {
@@ -328,9 +344,17 @@ pub const Parser = struct {
             if (line.kind != .List) return error.InvalidItem;
             const list_line = line.kind.List;
             if (list_line.depth > depth) return error.InvalidIndentation;
-            try array.append(
-                .{ .String = try p.maybeDupString(allocator, list_line.value.?) },
-            );
+
+            var value: Value = undefined;
+            if (list_line.value) |str| {
+                value = .{ .String = try p.maybeDupString(allocator, str) };
+            } else if (lines.peekNextDepth() != null and lines.peekNextDepth().? > depth) {
+                value = try p.readValue(allocator, lines);
+            } else {
+                value = .{ .String = "" };
+            }
+            try array.append(value);
+
             if (lines.peekNextDepth() != null and lines.peekNextDepth().? < depth) break;
         }
         return array;
@@ -347,6 +371,7 @@ pub const Parser = struct {
             if (line.kind != .Object) return error.InvalidItem;
             const obj_line = line.kind.Object;
             if (obj_line.depth > depth) return error.InvalidIndentation;
+
             var value: Value = undefined;
             if (obj_line.value) |str| {
                 value = .{ .String = try p.maybeDupString(allocator, str) };
@@ -356,6 +381,7 @@ pub const Parser = struct {
                 value = .{ .String = "" };
             }
             try map.put(try p.maybeDupString(allocator, obj_line.key), value);
+
             if (lines.peekNextDepth() != null and lines.peekNextDepth().? < depth) break;
         }
         return map;
@@ -538,7 +564,6 @@ test "convert to JSON: object" {
     ;
     testing.expectEqualStrings(expected_json, fbs.getWritten());
 }
-
 
 test "convert to JSON: object inside object" {
     var p = Parser.init(testing.allocator, .{});
