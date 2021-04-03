@@ -14,13 +14,13 @@ This will also create an executable CLI program `nt-cli` under `zig-cache/bin/`.
 $./zig-cache/bin/nt-cli -f samples/nested.nt | jq
 {
   "A": "1",
-  "B": "2\n3\n",
+  "B": "2\n3",
   "C": {
     "a": "4",
     "b": {
       "x": "5"
     },
-    "c": "6\n7\n"
+    "c": "6\n7"
   },
   "D": [
     "8",
@@ -30,7 +30,7 @@ $./zig-cache/bin/nt-cli -f samples/nested.nt | jq
     {
       "d": "10"
     },
-    "11\n12\n"
+    "11\n12"
   ]
 }
 ```
