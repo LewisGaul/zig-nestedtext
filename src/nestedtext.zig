@@ -10,8 +10,41 @@ const StringArrayHashMap = std.StringArrayHashMap;
 const Writer = std.io.Writer;
 
 // -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
+
+/// Return a slice corresponding to the first line of the given input,
+/// including the terminating newline character(s). If there is no terminating
+/// newline the entire input slice is returned. Returns null if the input is
+/// empty.
+fn readline(input: []const u8) ?[]const u8 {
+    if (input.len == 0) return null;
+    var idx: usize = 0;
+    while (idx < input.len) {
+        // Handle '\n'
+        if (input[idx] == '\n') {
+            idx += 1;
+            break;
+        }
+        // Handle '\r'
+        if (input[idx] == '\r') {
+            idx += 1;
+            // Handle '\r\n'
+            if (input.len >= idx and input[idx] == '\n') idx += 1;
+            break;
+        }
+        idx += 1;
+    }
+    return input[0..idx];
+}
+
+// -----------------------------------------------------------------------------
 // Types
 // -----------------------------------------------------------------------------
+
+const StringifyOptions = struct {
+    indent: usize = 2,
+};
 
 pub const ValueTree = struct {
     arena: ArenaAllocator,
@@ -19,6 +52,15 @@ pub const ValueTree = struct {
 
     pub fn deinit(self: @This()) void {
         self.arena.deinit();
+    }
+
+    pub fn stringify(
+        self: @This(),
+        options: StringifyOptions,
+        out_stream: anytype,
+    ) @TypeOf(out_stream).Error!void {
+        if (self.root) |value|
+            try value.stringify(options, out_stream);
     }
 
     pub fn toJson(self: @This(), allocator: *Allocator) !json.ValueTree {
@@ -39,6 +81,14 @@ pub const Value = union(enum) {
     String: []const u8,
     List: Array,
     Object: Map,
+
+    pub fn stringify(
+        value: @This(),
+        options: StringifyOptions,
+        out_stream: anytype,
+    ) @TypeOf(out_stream).Error!void {
+        try value.stringifyInternal(options, out_stream, 0, false);
+    }
 
     pub fn toJson(value: @This(), allocator: *Allocator) !json.ValueTree {
         var json_tree: json.ValueTree = undefined;
@@ -69,36 +119,76 @@ pub const Value = union(enum) {
             },
         }
     }
+
+    fn stringifyInternal(
+        value: @This(),
+        options: StringifyOptions,
+        out_stream: anytype,
+        indent: usize,
+        nested: bool,
+    ) @TypeOf(out_stream).Error!void {
+        switch (value) {
+            .String => |string| {
+                if (std.mem.indexOfAny(u8, string, "\r\n") == null) {
+                    // Single-line string.
+                    if (nested and string.len > 0) try out_stream.writeByte(' ');
+                    try out_stream.writeAll(string);
+                } else {
+                    // Multi-line string.
+                    if (nested) try out_stream.writeByte('\n');
+                    var idx: usize = 0;
+                    while (readline(string[idx..])) |line| {
+                        try out_stream.writeByteNTimes(' ', indent);
+                        try out_stream.writeByte('>');
+                        if (line.len > 0)
+                            try out_stream.print(" {s}", .{line});
+                        idx += line.len;
+                    }
+                    const last_char = string[string.len - 1];
+                    if (last_char == '\n' or last_char == '\r') {
+                        try out_stream.writeByteNTimes(' ', indent);
+                        try out_stream.writeByte('>');
+                    }
+                }
+            },
+            .List => |list| {
+                if (nested) try out_stream.writeByte('\n');
+                for (list.items) |*elem| {
+                    if (elem != &list.items[0]) try out_stream.writeByte('\n');
+                    try out_stream.writeByteNTimes(' ', indent);
+                    try out_stream.writeByte('-');
+                    try elem.stringifyInternal(
+                        options,
+                        out_stream,
+                        indent + options.indent,
+                        true,
+                    );
+                }
+            },
+            .Object => |object| {
+                if (nested) try out_stream.writeByte('\n');
+                var iter = object.iterator();
+                var first_elem = true;
+                while (iter.next()) |elem| {
+                    if (!first_elem) try out_stream.writeByte('\n');
+                    try out_stream.writeByteNTimes(' ', indent);
+                    try out_stream.print("{s}:", .{elem.key});
+                    try elem.value.stringifyInternal(
+                        options,
+                        out_stream,
+                        indent + options.indent,
+                        true,
+                    );
+                    first_elem = false;
+                }
+            },
+        }
+    }
 };
 
 // -----------------------------------------------------------------------------
 // Parsing logic
 // -----------------------------------------------------------------------------
-
-/// Return a slice corresponding to the first line of the given input,
-/// including the terminating newline character(s). If there is no terminating
-/// newline the entire input slice is returned. Returns null if the input is
-/// empty.
-fn readline(input: []const u8) ?[]const u8 {
-    if (input.len == 0) return null;
-    var idx: usize = 0;
-    while (idx < input.len) {
-        // Handle '\n'
-        if (input[idx] == '\n') {
-            idx += 1;
-            break;
-        }
-        // Handle '\r'
-        if (input[idx] == '\r') {
-            idx += 1;
-            // Handle '\r\n'
-            if (input.len >= idx and input[idx] == '\n') idx += 1;
-            break;
-        }
-        idx += 1;
-    }
-    return input[0..idx];
-}
 
 pub const Parser = struct {
     allocator: *Allocator,
@@ -324,11 +414,15 @@ pub const Parser = struct {
 
         while (lines.next()) |line| {
             if (line.kind != .String) return error.InvalidItem;
+            const is_last_line = lines.peekNextDepth() == null or lines.peekNextDepth().? < depth;
             const str_line = line.kind.String;
             if (str_line.depth > depth) return error.InvalidIndentation;
             // String must be copied as it's not contiguous in-file.
-            try writer.writeAll(str_line.value);
-            if (lines.peekNextDepth() != null and lines.peekNextDepth().? < depth) break;
+            if (is_last_line)
+                try writer.writeAll(std.mem.trimRight(u8, str_line.value, &[_]u8{ '\n', '\r' }))
+            else
+                try writer.writeAll(str_line.value);
+            if (is_last_line) break;
         }
         return buffer.items;
     }
@@ -482,6 +576,92 @@ test "nested parse: object inside object" {
     testing.expectEqualStrings("3", map.get("bar").?.Object.get("nest2").?.String);
 }
 
+test "stringify: empty" {
+    var p = Parser.init(testing.allocator, .{});
+
+    var tree = try p.parse("");
+    defer tree.deinit();
+
+    var buffer: [128]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try tree.stringify(.{}, fbs.outStream());
+    testing.expectEqualStrings("", fbs.getWritten());
+}
+
+test "stringify: string" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const s =
+        \\> this is a
+        \\> multiline
+        \\> string
+    ;
+
+    var tree = try p.parse(s);
+    defer tree.deinit();
+
+    var buffer: [128]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try tree.stringify(.{}, fbs.outStream());
+    testing.expectEqualStrings(s, fbs.getWritten());
+}
+
+test "stringify: list" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const s =
+        \\- foo
+        \\- bar
+    ;
+
+    var tree = try p.parse(s);
+    defer tree.deinit();
+
+    var buffer: [128]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try tree.stringify(.{}, fbs.outStream());
+    testing.expectEqualStrings(s, fbs.getWritten());
+}
+
+test "stringify: object" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const s =
+        \\foo: 1
+        \\bar: False
+    ;
+
+    var tree = try p.parse(s);
+    defer tree.deinit();
+
+    var json_tree = try tree.toJson(testing.allocator);
+    defer json_tree.deinit();
+
+    var buffer: [128]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try tree.stringify(.{}, fbs.outStream());
+    testing.expectEqualStrings(s, fbs.getWritten());
+}
+
+test "stringify: multiline string inside object" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const s =
+        \\foo:
+        \\  > multi
+        \\  > line
+        \\bar:
+    ;
+
+    var tree = try p.parse(s);
+    defer tree.deinit();
+
+    var buffer: [128]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try tree.stringify(.{}, fbs.outStream());
+    testing.expectEqualStrings(s, fbs.getWritten());
+}
+
 test "convert to JSON: empty" {
     var p = Parser.init(testing.allocator, .{});
 
@@ -633,6 +813,31 @@ test "convert to JSON: multiline string inside object" {
     try json_tree.root.jsonStringify(.{}, fbs.outStream());
     const expected_json =
         \\{"foo":"multi\nline"}
+    ;
+    testing.expectEqualStrings(expected_json, fbs.getWritten());
+}
+
+test "convert to JSON: multiline string inside list" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const s =
+        \\ -
+        \\   > multi
+        \\   > line
+        \\ -
+    ;
+
+    var tree = try p.parse(s);
+    defer tree.deinit();
+
+    var json_tree = try tree.toJson(testing.allocator);
+    defer json_tree.deinit();
+
+    var buffer: [128]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try json_tree.root.jsonStringify(.{}, fbs.outStream());
+    const expected_json =
+        \\["multi\nline",""]
     ;
     testing.expectEqualStrings(expected_json, fbs.getWritten());
 }
