@@ -97,7 +97,7 @@ pub const Value = union(enum) {
         return json_tree;
     }
 
-    pub fn toJsonValue(value: @This(), allocator: *Allocator) anyerror!json.Value {
+    fn toJsonValue(value: @This(), allocator: *Allocator) anyerror!json.Value {
         switch (value) {
             .String => |inner| return json.Value{ .String = inner },
             .List => |inner| {
@@ -185,6 +185,58 @@ pub const Value = union(enum) {
         }
     }
 };
+
+/// Memory owned by caller on success - free with 'ValueTree.deinit()'.
+pub fn fromJson(allocator: *Allocator, json_value: json.Value) !ValueTree {
+    var tree = ValueTree{
+        .arena = ArenaAllocator.init(allocator),
+        .root = null,
+    };
+    tree.root = try fromJsonInternal(&tree.arena.allocator, json_value);
+    return tree;
+}
+
+fn fromJsonInternal(allocator: *Allocator, json_value: json.Value) anyerror!Value {
+    switch (json_value) {
+        .Null => return Value{ .String = "null" },
+        .Bool => |inner| return Value{ .String = if (inner) "true" else "false" },
+        .Integer, .Float, .String => {
+            var buffer = ArrayList(u8).init(allocator);
+            errdefer buffer.deinit();
+            switch (json_value) {
+                .Integer => |inner| {
+                    try buffer.writer().print("{d}", .{inner});
+                },
+                .Float => |inner| {
+                    try buffer.writer().print("{e}", .{inner});
+                },
+                .String => |inner| {
+                    try buffer.writer().print("{s}", .{inner});
+                },
+                else => unreachable,
+            }
+            return Value{ .String = buffer.items };
+        },
+        .Array => |inner| {
+            var array = Array.init(allocator);
+            for (inner.items) |elem| {
+                try array.append(try fromJsonInternal(allocator, elem));
+            }
+            return Value{ .List = array };
+        },
+        .Object => |inner| {
+            var map = Map.init(allocator);
+            var iter = inner.iterator();
+            while (iter.next()) |elem| {
+                try map.put(
+                    try allocator.dupe(u8, elem.key),
+                    try fromJsonInternal(allocator, elem.value),
+                );
+            }
+            return Value{ .Object = map };
+        },
+    }
+}
 
 // -----------------------------------------------------------------------------
 // Parsing logic
@@ -399,7 +451,7 @@ pub const Parser = struct {
             .String => .{ .String = try p.readString(allocator, lines) },
             .List => .{ .List = try p.readList(allocator, lines) },
             .Object => .{ .Object = try p.readObject(allocator, lines) },
-            .Unrecognised => return error.UnrecognisedLine,
+            .Unrecognised => error.UnrecognisedLine,
             .Blank, .Comment => unreachable, // Skipped by iterator
         };
     }

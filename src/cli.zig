@@ -1,4 +1,5 @@
 const std = @import("std");
+const json = std.json;
 
 const clap = @import("clap");
 
@@ -35,7 +36,7 @@ fn mainWorker() WriteError!u8 {
         clap.parseParam("-h, --help              Display this help and exit") catch unreachable,
         clap.parseParam("-f, --infile <PATH>     Input file (defaults to stdin)") catch unreachable,
         clap.parseParam("-o, --outfile <PATH>    Output file (defaults to stdout)") catch unreachable,
-        // clap.parseParam("-F, --informat <PATH>   Input format (defaults to 'nt')") catch unreachable,
+        clap.parseParam("-F, --informat <PATH>   Input format (defaults to 'nt')") catch unreachable,
         clap.parseParam("-O, --outformat <PATH>  Output format (defaults to 'json')") catch unreachable,
     };
 
@@ -59,15 +60,15 @@ fn mainWorker() WriteError!u8 {
     }
 
     var input_format: Format = .NestedText;
-    // if (args.option("--informat")) |fmt| {
-    //     input_format = parseFormat(fmt) catch {
-    //         try stderr.print(
-    //             "Unrecognised input format '{s}', should be one of 'json' or 'nt'\n",
-    //             .{fmt},
-    //         );
-    //         return 1;
-    //     };
-    // }
+    if (args.option("--informat")) |fmt| {
+        input_format = parseFormat(fmt) catch {
+            try stderr.print(
+                "Unrecognised input format '{s}', should be one of 'json' or 'nt'\n",
+                .{fmt},
+            );
+            return 1;
+        };
+    }
 
     var output_format: Format = .Json;
     if (args.option("--outformat")) |fmt| {
@@ -112,24 +113,53 @@ fn mainWorker() WriteError!u8 {
         output_file = std.io.getStdOut();
     }
 
-    var parser = nestedtext.Parser.init(std.heap.page_allocator, .{});
-    const tree = parser.parse(input) catch {
-        try stderr.writeAll("Failed to parse file as NestedText\n");
-        return 1;
-    };
-    defer tree.deinit();
-
-    switch (output_format) {
-        .Json => {
-            var json_tree = tree.toJson(std.heap.page_allocator) catch {
-                try stderr.writeAll("Failed to convert to JSON\n");
+    switch (input_format) {
+        .NestedText => {
+            var parser = nestedtext.Parser.init(
+                std.heap.page_allocator,
+                .{ .copy_strings = false },
+            );
+            const tree = parser.parse(input) catch {
+                try stderr.writeAll("Failed to parse file as NestedText\n");
                 return 1;
             };
-            defer json_tree.deinit();
-            try json_tree.root.jsonStringify(.{}, output_file.writer());
+            defer tree.deinit();
+
+            switch (output_format) {
+                .Json => {
+                    var json_tree = tree.toJson(std.heap.page_allocator) catch {
+                        try stderr.writeAll("Failed to convert NestedText to JSON\n");
+                        return 1;
+                    };
+                    defer json_tree.deinit();
+                    try json_tree.root.jsonStringify(.{}, output_file.writer());
+                },
+                .NestedText => {
+                    try tree.stringify(.{}, output_file.writer());
+                },
+            }
         },
-        .NestedText => {
-            try tree.stringify(.{}, output_file.writer());
+        .Json => {
+            var parser = json.Parser.init(std.heap.page_allocator, false);
+            var tree = parser.parse(input) catch {
+                try stderr.writeAll("Failed to parse file as JSON\n");
+                return 1;
+            };
+            defer tree.deinit();
+
+            switch (output_format) {
+                .Json => {
+                    try tree.root.jsonStringify(.{}, output_file.writer());
+                },
+                .NestedText => {
+                    var nt_tree = nestedtext.fromJson(std.heap.page_allocator, tree.root) catch {
+                        try stderr.writeAll("Failed to convert JSON to NestedText\n");
+                        return 1;
+                    };
+                    defer nt_tree.deinit();
+                    try nt_tree.stringify(.{}, output_file.writer());
+                },
+            }
         },
     }
 
