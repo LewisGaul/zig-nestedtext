@@ -2,7 +2,7 @@ const std = @import("std");
 const json = std.json;
 const testing = std.testing;
 
-const nestedtext = @import("nestedtext.zig");
+const nestedtext = @import("nestedtext");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.fs.Dir;

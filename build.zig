@@ -27,19 +27,20 @@ pub fn build(b: *Builder) void {
     // Running tests.
     var inline_tests = b.addTest("src/nestedtext.zig");
     inline_tests.setBuildMode(mode);
-    var testsuite = b.addTest("src/testsuite.zig");
+    var testsuite = b.addTest("tests/testsuite.zig");
     testsuite.setBuildMode(mode);
+    testsuite.addPackagePath("nestedtext", "src/nestedtext.zig");
 
     // Define the 'test' subcommand.
     // In order:
     //  - Run inline lib tests
-    //  - Run testsuite
     //  - Build the lib and exe
+    //  - Run testsuite
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&inline_tests.step);
-    test_step.dependOn(&testsuite.step);
     test_step.dependOn(&lib.step);
     test_step.dependOn(&exe.step);
+    test_step.dependOn(&testsuite.step);
 
     const run_cmd = exe.run();
     run_cmd.step.dependOn(&exe.step);  // TODO: Is this needed?
