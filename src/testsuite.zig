@@ -7,7 +7,7 @@ const nestedtext = @import("nestedtext.zig");
 const Allocator = std.mem.Allocator;
 const Dir = std.fs.Dir;
 
-const testcases_path = "nestedtext_tests/test_cases/";
+const testcases_path = "tests/official_tests/test_cases/";
 
 const max_file_size: usize = 1024 * 1024;
 
