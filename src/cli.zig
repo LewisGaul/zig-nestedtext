@@ -115,7 +115,7 @@ fn mainWorker() WriteError!u8 {
 
     switch (input_format) {
         .NestedText => {
-            var parser = nestedtext.Parser.init(
+            const parser = nestedtext.Parser.init(
                 std.heap.page_allocator,
                 .{ .copy_strings = false },
             );
@@ -141,6 +141,7 @@ fn mainWorker() WriteError!u8 {
         },
         .Json => {
             var parser = json.Parser.init(std.heap.page_allocator, false);
+            defer parser.deinit();
             var tree = parser.parse(input) catch {
                 try stderr.writeAll("Failed to parse file as JSON\n");
                 return 1;

@@ -11,29 +11,40 @@ pub fn build(b: *Builder) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
     const mode = b.standardReleaseOptions();
 
+    // Building the nestedtext lib.
     const lib = b.addStaticLibrary("nestedtext", "src/nestedtext.zig");
     lib.setTarget(target);
     lib.setBuildMode(mode);
     lib.install();
 
+    // Building the nt-cli exe.
     const exe = b.addExecutable("nt-cli", "src/cli.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
     exe.addPackagePath("clap", "deps/zig-clap/clap.zig");
     exe.install();
 
-    var tests = b.addTest("src/nestedtext.zig");
-    tests.setBuildMode(mode);
+    // Running tests.
+    var inline_tests = b.addTest("src/nestedtext.zig");
+    inline_tests.setBuildMode(mode);
+    var testsuite = b.addTest("src/testsuite.zig");
+    testsuite.setBuildMode(mode);
 
-    const test_step = b.step("test", "Run library tests");
-    test_step.dependOn(&tests.step);
+    // Define the 'test' subcommand.
+    // In order:
+    //  - Run inline lib tests
+    //  - Run testsuite
+    //  - Build the lib and exe
+    const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&inline_tests.step);
+    test_step.dependOn(&testsuite.step);
     test_step.dependOn(&lib.step);
     test_step.dependOn(&exe.step);
 
     const run_cmd = exe.run();
-    run_cmd.step.dependOn(&lib.step);
-    run_cmd.step.dependOn(&exe.step);
+    run_cmd.step.dependOn(&exe.step);  // TODO: Is this needed?
 
+    // Define the 'run' subcommand.
     const run_step = b.step("run", "Run the NestedText CLI");
     run_step.dependOn(&run_cmd.step);
 }
