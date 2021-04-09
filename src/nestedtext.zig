@@ -48,29 +48,10 @@ const StringifyOptions = struct {
 
 pub const ValueTree = struct {
     arena: ArenaAllocator,
-    root: ?Value,
+    root: Value,
 
     pub fn deinit(self: @This()) void {
         self.arena.deinit();
-    }
-
-    pub fn stringify(
-        self: @This(),
-        options: StringifyOptions,
-        out_stream: anytype,
-    ) @TypeOf(out_stream).Error!void {
-        if (self.root) |value|
-            try value.stringify(options, out_stream);
-    }
-
-    pub fn toJson(self: @This(), allocator: *Allocator) !json.ValueTree {
-        if (self.root) |value|
-            return value.toJson(allocator)
-        else
-            return json.ValueTree{
-                .arena = ArenaAllocator.init(allocator),
-                .root = json.Value.Null,
-            };
     }
 };
 
@@ -188,10 +169,9 @@ pub const Value = union(enum) {
 
 /// Memory owned by caller on success - free with 'ValueTree.deinit()'.
 pub fn fromJson(allocator: *Allocator, json_value: json.Value) !ValueTree {
-    var tree = ValueTree{
-        .arena = ArenaAllocator.init(allocator),
-        .root = null,
-    };
+    var tree: ValueTree = undefined;
+    tree.arena = ArenaAllocator.init(allocator);
+    errdefer tree.deinit();
     tree.root = try fromJsonInternal(&tree.arena.allocator, json_value);
     return tree;
 }
@@ -335,10 +315,8 @@ pub const Parser = struct {
 
     /// Memory owned by caller on success - free with 'ValueTree.deinit()'.
     pub fn parse(p: Self, input: []const u8) !ValueTree {
-        var tree = ValueTree{
-            .arena = ArenaAllocator.init(p.allocator),
-            .root = null,
-        };
+        var tree: ValueTree = undefined;
+        tree.arena = ArenaAllocator.init(p.allocator);
         errdefer tree.deinit();
 
         // TODO: This should be an iterator, i.e. don't loop over all lines
@@ -351,8 +329,10 @@ pub const Parser = struct {
 
         var iter = LinesIter.init(lines);
 
-        if (iter.peekNext() != null)
-            tree.root = try p.readValue(&tree.arena.allocator, &iter); // Recursively parse
+        tree.root = if (iter.peekNext() != null)
+            try p.readValue(&tree.arena.allocator, &iter) // Recursively parse
+        else
+            .{ .String = "" };
 
         return tree;
     }
@@ -548,7 +528,7 @@ test "parse empty" {
     var tree = try p.parse("");
     defer tree.deinit();
 
-    testing.expectEqual(@as(?Value, null), tree.root);
+    testing.expectEqual(Value{.String=""}, tree.root);
 }
 
 test "basic parse: string" {
@@ -563,10 +543,7 @@ test "basic parse: string" {
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var root: Value = tree.root.?;
-    var string: []const u8 = root.String;
-
-    testing.expectEqualStrings("this is a\nmultiline\nstring", string);
+    testing.expectEqualStrings("this is a\nmultiline\nstring", tree.root.String);
 }
 
 test "basic parse: list" {
@@ -580,8 +557,7 @@ test "basic parse: list" {
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var root: Value = tree.root.?;
-    var array: Array = root.List;
+    const array: Array = tree.root.List;
 
     testing.expectEqualStrings("foo", array.items[0].String);
     testing.expectEqualStrings("bar", array.items[1].String);
@@ -598,8 +574,7 @@ test "basic parse: object" {
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var root: Value = tree.root.?;
-    var map: Map = root.Object;
+    const map: Map = tree.root.Object;
 
     testing.expectEqualStrings("1", map.get("foo").?.String);
     testing.expectEqualStrings("False", map.get("bar").?.String);
@@ -619,8 +594,7 @@ test "nested parse: object inside object" {
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var root: Value = tree.root.?;
-    var map: Map = root.Object;
+    const map: Map = tree.root.Object;
 
     testing.expectEqualStrings("1", map.get("foo").?.String);
     testing.expectEqualStrings("", map.get("baz").?.String);
@@ -636,7 +610,7 @@ test "stringify: empty" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try tree.stringify(.{}, fbs.outStream());
+    try tree.root.stringify(.{}, fbs.outStream());
     testing.expectEqualStrings("", fbs.getWritten());
 }
 
@@ -654,7 +628,7 @@ test "stringify: string" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try tree.stringify(.{}, fbs.outStream());
+    try tree.root.stringify(.{}, fbs.outStream());
     testing.expectEqualStrings(s, fbs.getWritten());
 }
 
@@ -671,7 +645,7 @@ test "stringify: list" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try tree.stringify(.{}, fbs.outStream());
+    try tree.root.stringify(.{}, fbs.outStream());
     testing.expectEqualStrings(s, fbs.getWritten());
 }
 
@@ -686,12 +660,9 @@ test "stringify: object" {
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var json_tree = try tree.toJson(testing.allocator);
-    defer json_tree.deinit();
-
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try tree.stringify(.{}, fbs.outStream());
+    try tree.root.stringify(.{}, fbs.outStream());
     testing.expectEqualStrings(s, fbs.getWritten());
 }
 
@@ -710,7 +681,7 @@ test "stringify: multiline string inside object" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try tree.stringify(.{}, fbs.outStream());
+    try tree.root.stringify(.{}, fbs.outStream());
     testing.expectEqualStrings(s, fbs.getWritten());
 }
 
@@ -720,13 +691,13 @@ test "convert to JSON: empty" {
     var tree = try p.parse("");
     defer tree.deinit();
 
-    var json_tree = try tree.toJson(testing.allocator);
+    var json_tree = try tree.root.toJson(testing.allocator);
     defer json_tree.deinit();
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
     try json_tree.root.jsonStringify(.{}, fbs.outStream());
-    testing.expectEqualStrings("null", fbs.getWritten());
+    testing.expectEqualStrings("\"\"", fbs.getWritten());
 }
 
 test "convert to JSON: string" {
@@ -741,7 +712,7 @@ test "convert to JSON: string" {
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var json_tree = try tree.toJson(testing.allocator);
+    var json_tree = try tree.root.toJson(testing.allocator);
     defer json_tree.deinit();
 
     var buffer: [128]u8 = undefined;
@@ -761,7 +732,7 @@ test "convert to JSON: list" {
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var json_tree = try tree.toJson(testing.allocator);
+    var json_tree = try tree.root.toJson(testing.allocator);
     defer json_tree.deinit();
 
     var buffer: [128]u8 = undefined;
@@ -784,7 +755,7 @@ test "convert to JSON: object" {
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var json_tree = try tree.toJson(testing.allocator);
+    var json_tree = try tree.root.toJson(testing.allocator);
     defer json_tree.deinit();
 
     var buffer: [128]u8 = undefined;
@@ -809,7 +780,7 @@ test "convert to JSON: object inside object" {
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var json_tree = try tree.toJson(testing.allocator);
+    var json_tree = try tree.root.toJson(testing.allocator);
     defer json_tree.deinit();
 
     var buffer: [128]u8 = undefined;
@@ -833,7 +804,7 @@ test "convert to JSON: list inside object" {
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var json_tree = try tree.toJson(testing.allocator);
+    var json_tree = try tree.root.toJson(testing.allocator);
     defer json_tree.deinit();
 
     var buffer: [128]u8 = undefined;
@@ -857,7 +828,7 @@ test "convert to JSON: multiline string inside object" {
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var json_tree = try tree.toJson(testing.allocator);
+    var json_tree = try tree.root.toJson(testing.allocator);
     defer json_tree.deinit();
 
     var buffer: [128]u8 = undefined;
@@ -882,7 +853,7 @@ test "convert to JSON: multiline string inside list" {
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var json_tree = try tree.toJson(testing.allocator);
+    var json_tree = try tree.root.toJson(testing.allocator);
     defer json_tree.deinit();
 
     var buffer: [128]u8 = undefined;

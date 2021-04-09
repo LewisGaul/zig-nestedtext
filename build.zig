@@ -16,17 +16,19 @@ pub fn build(b: *Builder) void {
     lib.setBuildMode(mode);
     lib.install();
 
-    var tests = b.addTest("src/nestedtext.zig");
-    tests.setBuildMode(mode);
-
-    const test_step = b.step("test", "Run library tests");
-    test_step.dependOn(&tests.step);
-
     const exe = b.addExecutable("nt-cli", "src/cli.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
     exe.addPackagePath("clap", "deps/zig-clap/clap.zig");
     exe.install();
+
+    var tests = b.addTest("src/nestedtext.zig");
+    tests.setBuildMode(mode);
+
+    const test_step = b.step("test", "Run library tests");
+    test_step.dependOn(&tests.step);
+    test_step.dependOn(&lib.step);
+    test_step.dependOn(&exe.step);
 
     const run_cmd = exe.run();
     run_cmd.step.dependOn(&lib.step);

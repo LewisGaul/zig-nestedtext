@@ -127,7 +127,7 @@ fn mainWorker() WriteError!u8 {
 
             switch (output_format) {
                 .Json => {
-                    var json_tree = tree.toJson(std.heap.page_allocator) catch {
+                    var json_tree = tree.root.toJson(std.heap.page_allocator) catch {
                         try stderr.writeAll("Failed to convert NestedText to JSON\n");
                         return 1;
                     };
@@ -135,7 +135,7 @@ fn mainWorker() WriteError!u8 {
                     try json_tree.root.jsonStringify(.{}, output_file.writer());
                 },
                 .NestedText => {
-                    try tree.stringify(.{}, output_file.writer());
+                    try tree.root.stringify(.{}, output_file.writer());
                 },
             }
         },
@@ -157,7 +157,7 @@ fn mainWorker() WriteError!u8 {
                         return 1;
                     };
                     defer nt_tree.deinit();
-                    try nt_tree.stringify(.{}, output_file.writer());
+                    try nt_tree.root.stringify(.{}, output_file.writer());
                 },
             }
         },
