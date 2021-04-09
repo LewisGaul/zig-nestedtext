@@ -11,7 +11,12 @@ const testcases_path = "nestedtext_tests/test_cases/";
 
 const max_file_size: usize = 1024 * 1024;
 
-/// Memory owned by the caller.
+const skipped_testcases = [_][]const u8{
+    "empty_1", // Bad testcase - empty file maps to null??
+    "string_9", // Bug?
+};
+
+/// Returned memory is owned by the caller.
 fn canonicaliseJson(allocator: *Allocator, json_input: []const u8) ![]const u8 {
     var json_tree = try json.Parser.init(allocator, false).parse(json_input);
     defer json_tree.deinit();
@@ -96,20 +101,46 @@ fn testSingle(allocator: *Allocator, dir: std.fs.Dir) !void {
     }
 }
 
-fn testAll(base_dir: std.fs.Dir) !void {
+fn skipTestcase(name: []const u8) bool {
+    for (skipped_testcases) |skip| {
+        if (std.mem.eql(u8, name, skip)) return true;
+    }
+    return false;
+}
+
+/// Returns the number of testcases that failed.
+fn testAll(base_dir: std.fs.Dir) !usize {
+    var num_failures: usize = 0;
     std.debug.print("\n", .{});
-    for ([_][]const u8{ "dict_01", "dict_03", "dict_04", "dict_05" }) |subdir| { // TODO: Iterate over all tests
-        var dir = try base_dir.openDir(subdir, .{});
+    var iter = base_dir.iterate();
+    while (try iter.next()) |*entry| {
+        std.debug.assert(entry.kind == .Directory);
+        if (skipTestcase(entry.name)) {
+            std.debug.print("Skipping testcase: {s}\n", .{entry.name});
+            num_failures += 1;
+            continue;
+        }
+        var dir = try base_dir.openDir(entry.name, .{});
         defer dir.close();
-        std.debug.print("Running testcase: {s}\n", .{subdir});
+        std.debug.print("Running testcase: {s}\n", .{entry.name});
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
-        try testSingle(&arena.allocator, dir);
+        testSingle(&arena.allocator, dir) catch |e| {
+            std.debug.print("Testcase failure: {}\n", .{e});
+            num_failures += 1;
+        };
     }
+    return num_failures;
 }
 
 test "All testcases" {
     var testcases_dir = try std.fs.cwd().openDir(testcases_path, .{ .iterate = true });
     defer testcases_dir.close();
-    try testAll(testcases_dir);
+    const failures = try testAll(testcases_dir);
+    if (failures == 0) {
+        std.debug.print("All tests passed!\n", .{});
+    } else {
+        std.debug.print("{d} tests failed\n", .{failures});
+        testing.expect(false);
+    }
 }
