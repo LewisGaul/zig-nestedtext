@@ -94,11 +94,11 @@ fn mainWorker() WriteError!u8 {
     const max_size = 1024 * 1024 * 1024; // 1GB
     const input = input_file.readToEndAlloc(std.heap.page_allocator, max_size) catch |err| switch (err) {
         error.FileTooBig => {
-            try stderr.print("Failed to read file, {s} - 1GB max\n", .{@errorName(err)});
+            try stderr.print("Failed to read input, {s} - 1GB max\n", .{@errorName(err)});
             return 1;
         },
         else => {
-            try stderr.print("Failed to read file, {s}\n", .{@errorName(err)});
+            try stderr.print("Failed to read input, {s}\n", .{@errorName(err)});
             return 1;
         },
     };
@@ -120,7 +120,7 @@ fn mainWorker() WriteError!u8 {
                 .{ .copy_strings = false },
             );
             const tree = parser.parse(input) catch {
-                try stderr.writeAll("Failed to parse file as NestedText\n");
+                try stderr.writeAll("Failed to parse input as NestedText\n");
                 return 1;
             };
             defer tree.deinit();
@@ -143,7 +143,7 @@ fn mainWorker() WriteError!u8 {
             var parser = json.Parser.init(std.heap.page_allocator, false);
             defer parser.deinit();
             var tree = parser.parse(input) catch {
-                try stderr.writeAll("Failed to parse file as JSON\n");
+                try stderr.writeAll("Failed to parse input as JSON\n");
                 return 1;
             };
             defer tree.deinit();
@@ -167,7 +167,6 @@ fn mainWorker() WriteError!u8 {
     return 0;
 }
 
-pub fn main() void {
-    const rc = mainWorker() catch 1;
-    std.process.exit(rc);
+pub fn main() u8 {
+    return mainWorker() catch 1;
 }
