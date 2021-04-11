@@ -174,7 +174,6 @@ fn skipTestcase(name: []const u8) bool {
     return false;
 }
 
-/// Returns the number of testcases that failed.
 fn testAll(base_dir: std.fs.Dir) !void {
     std.debug.print("\n", .{});
     var iter = base_dir.iterate();
