@@ -8,9 +8,18 @@ const nestedtext = @import("nestedtext.zig");
 const WriteError = std.os.WriteError;
 const File = std.fs.File;
 
+const allocator = std.heap.page_allocator;
+
 const Format = enum {
     NestedText,
     Json,
+};
+
+const Args = struct {
+    input_file: File,
+    output_file: File,
+    input_format: Format = .NestedText,
+    output_format: Format = .Json,
 };
 
 // -----------------------------------------------------------------------------
@@ -27,7 +36,7 @@ fn parseFormat(fmt: []const u8) !Format {
     }
 }
 
-fn mainWorker() WriteError!u8 {
+fn parseArgs() !Args {
     var stderr = std.io.getStdErr().writer();
 
     // First we specify what parameters our program can take.
@@ -40,59 +49,82 @@ fn mainWorker() WriteError!u8 {
         clap.parseParam("-O, --outformat <PATH>  Output format (defaults to 'json')") catch unreachable,
     };
 
-    // Initalize our diagnostics, which can be used for reporting useful errors.
-    // This is optional. You can also just pass 'null' to 'parser.next' if you
-    // don't care about the extra information 'Diagnostics' provides.
+    // Initalize diagnostics for reporting parsing errors.
     var diag: clap.Diagnostic = undefined;
-
-    var args = clap.parse(clap.Help, &params, std.heap.page_allocator, &diag) catch |err| {
+    var clap_args = clap.parse(clap.Help, &params, allocator, &diag) catch |err| {
         diag.report(stderr, err) catch {};
-        return 2;
+        return err;
     };
-    defer args.deinit();
+    defer clap_args.deinit();
 
-    if (args.flag("--help")) {
-        try stderr.writeAll("nt-cli ");
+    if (clap_args.flag("--help")) {
+        try stderr.print("{s} ", .{clap_args.exe_arg});
         try clap.usage(stderr, &params);
         try stderr.writeByte('\n');
         try clap.help(stderr, &params);
-        return 0;
+        std.process.exit(0);
     }
 
-    var input_format: Format = .NestedText;
-    if (args.option("--informat")) |fmt| {
-        input_format = parseFormat(fmt) catch {
+    var args = Args{ .input_file = undefined, .output_file = undefined };
+
+    if (clap_args.option("--informat")) |fmt| {
+        args.input_format = parseFormat(fmt) catch |err| {
             try stderr.print(
                 "Unrecognised input format '{s}', should be one of 'json' or 'nt'\n",
                 .{fmt},
             );
-            return 1;
+            return err;
         };
     }
 
-    var output_format: Format = .Json;
-    if (args.option("--outformat")) |fmt| {
-        output_format = parseFormat(fmt) catch {
+    if (clap_args.option("--outformat")) |fmt| {
+        args.output_format = parseFormat(fmt) catch |err| {
             try stderr.print(
                 "Unrecognised output format '{s}', should be one of 'json' or 'nt'\n",
                 .{fmt},
             );
-            return 1;
+            return err;
         };
     }
 
-    var input_file: File = undefined;
-    if (args.option("--infile")) |infile| {
-        input_file = std.fs.cwd().openFile(infile, .{}) catch {
+    if (clap_args.option("--infile")) |infile| {
+        args.input_file = std.fs.cwd().openFile(infile, .{}) catch |err| {
             try stderr.print("Failed to open file {s}\n", .{infile});
-            return 1;
+            return err;
         };
     } else {
-        input_file = std.io.getStdIn();
+        args.input_file = std.io.getStdIn();
     }
 
+    if (clap_args.option("--outfile")) |outfile| {
+        args.output_file = std.fs.cwd().createFile(outfile, .{}) catch |err| {
+            try stderr.print("Failed to create file {s}\n", .{outfile});
+            return err;
+        };
+    } else {
+        args.output_file = std.io.getStdOut();
+    }
+
+    return args;
+}
+
+fn mainWorker() WriteError!u8 {
+    var stderr = std.io.getStdErr().writer();
+
+    const args = parseArgs() catch |err| switch (err) {
+        error.InvalidArgument,
+        error.MissingValue,
+        error.DoesntTakeValue,
+        error.UnrecognisedFormat,
+        => return 2,
+        else => return 1,
+    };
+
     const max_size = 1024 * 1024 * 1024; // 1GB
-    const input = input_file.readToEndAlloc(std.heap.page_allocator, max_size) catch |err| switch (err) {
+    const input = args.input_file.readToEndAlloc(
+        std.heap.page_allocator,
+        max_size,
+    ) catch |err| switch (err) {
         error.FileTooBig => {
             try stderr.print("Failed to read input, {s} - 1GB max\n", .{@errorName(err)});
             return 1;
@@ -103,39 +135,41 @@ fn mainWorker() WriteError!u8 {
         },
     };
 
-    var output_file: File = undefined;
-    if (args.option("--outfile")) |outfile| {
-        output_file = std.fs.cwd().createFile(outfile, .{}) catch {
-            try stderr.print("Failed to create file {s}\n", .{outfile});
-            return 1;
-        };
-    } else {
-        output_file = std.io.getStdOut();
-    }
-
-    switch (input_format) {
+    switch (args.input_format) {
         .NestedText => {
-            const parser = nestedtext.Parser.init(
+            var parser = nestedtext.Parser.init(
                 std.heap.page_allocator,
                 .{ .copy_strings = false },
             );
-            const tree = parser.parse(input) catch {
-                try stderr.writeAll("Failed to parse input as NestedText\n");
+            var diags: nestedtext.Parser.Diags = undefined;
+            parser.diags = &diags;
+            const tree = parser.parse(input) catch |err| {
+                if (diags == nestedtext.Parser.Diags.ParseError) {
+                    try stderr.print(
+                        "Failed to parse input as NestedText: {s} (line {d})\n",
+                        .{ diags.ParseError.message, diags.ParseError.lineno },
+                    );
+                } else {
+                    try stderr.print(
+                        "Failed to parse input NestedText: {s}\n",
+                        .{@errorName(err)},
+                    );
+                }
                 return 1;
             };
             defer tree.deinit();
 
-            switch (output_format) {
+            switch (args.output_format) {
                 .Json => {
                     var json_tree = tree.root.toJson(std.heap.page_allocator) catch {
                         try stderr.writeAll("Failed to convert NestedText to JSON\n");
                         return 1;
                     };
                     defer json_tree.deinit();
-                    try json_tree.root.jsonStringify(.{}, output_file.writer());
+                    try json_tree.root.jsonStringify(.{}, args.output_file.writer());
                 },
                 .NestedText => {
-                    try tree.root.stringify(.{}, output_file.writer());
+                    try tree.root.stringify(.{}, args.output_file.writer());
                 },
             }
         },
@@ -148,9 +182,9 @@ fn mainWorker() WriteError!u8 {
             };
             defer tree.deinit();
 
-            switch (output_format) {
+            switch (args.output_format) {
                 .Json => {
-                    try tree.root.jsonStringify(.{}, output_file.writer());
+                    try tree.root.jsonStringify(.{}, args.output_file.writer());
                 },
                 .NestedText => {
                     var nt_tree = nestedtext.fromJson(std.heap.page_allocator, tree.root) catch {
@@ -158,7 +192,7 @@ fn mainWorker() WriteError!u8 {
                         return 1;
                     };
                     defer nt_tree.deinit();
-                    try nt_tree.root.stringify(.{}, output_file.writer());
+                    try nt_tree.root.stringify(.{}, args.output_file.writer());
                 },
             }
         },
