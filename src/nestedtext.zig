@@ -42,6 +42,12 @@ fn readline(input: []const u8) ?[]const u8 {
 // Types
 // -----------------------------------------------------------------------------
 
+pub const ParseError = error{
+    InvalidIndentation,
+    InvalidItem,
+    UnrecognisedLine,
+};
+
 const StringifyOptions = struct {
     indent: usize = 2,
 };
@@ -225,6 +231,8 @@ fn fromJsonInternal(allocator: *Allocator, json_value: json.Value) anyerror!Valu
 pub const Parser = struct {
     allocator: *Allocator,
     options: ParseOptions,
+    /// If non-null, this struct is filled in by each call to parse().
+    diags: ?*Diags = null,
 
     const Self = @This();
 
@@ -238,6 +246,11 @@ pub const Parser = struct {
 
         /// Whether to copy strings or return existing slices.
         copy_strings: bool = true,
+    };
+
+    pub const Diags = union(enum) {
+        Empty,
+        ParseError: struct { lineno: usize, message: []const u8 },
     };
 
     const LineType = union(enum) {
@@ -315,6 +328,7 @@ pub const Parser = struct {
 
     /// Memory owned by caller on success - free with 'ValueTree.deinit()'.
     pub fn parse(p: Self, input: []const u8) !ValueTree {
+        if (p.diags) |diags| diags.* = Diags.Empty;
         var tree: ValueTree = undefined;
         tree.arena = ArenaAllocator.init(p.allocator);
         errdefer tree.deinit();
@@ -427,11 +441,21 @@ pub const Parser = struct {
     fn readValue(p: Self, allocator: *Allocator, lines: *LinesIter) anyerror!Value {
         // Call read<type>() with the first line of the type queued up as the
         // next line in the lines iterator.
-        return switch (lines.peekNext().?.kind) {
+        const next_line = lines.peekNext().?;
+        return switch (next_line.kind) {
             .String => .{ .String = try p.readString(allocator, lines) },
             .List => .{ .List = try p.readList(allocator, lines) },
             .Object => .{ .Object = try p.readObject(allocator, lines) },
-            .Unrecognised => error.UnrecognisedLine,
+            .Unrecognised => {
+                if (p.diags) |diags|
+                    diags.* = .{
+                        .ParseError = .{
+                            .lineno = next_line.lineno,
+                            .message = "Unrecognised line type",
+                        },
+                    };
+                return error.UnrecognisedLine;
+            },
             .Blank, .Comment => unreachable, // Skipped by iterator
         };
     }
@@ -445,10 +469,28 @@ pub const Parser = struct {
         const depth = lines.peekNext().?.kind.String.depth;
 
         while (lines.next()) |line| {
-            if (line.kind != .String) return error.InvalidItem;
+            if (line.kind != .String) {
+                if (p.diags) |diags|
+                    diags.* = .{
+                        .ParseError = .{
+                            .lineno = line.lineno,
+                            .message = "Invalid line type following multi-line string",
+                        },
+                    };
+                return error.InvalidItem;
+            }
             const is_last_line = lines.peekNextDepth() == null or lines.peekNextDepth().? < depth;
             const str_line = line.kind.String;
-            if (str_line.depth > depth) return error.InvalidIndentation;
+            if (str_line.depth > depth) {
+                if (p.diags) |diags|
+                    diags.* = .{
+                        .ParseError = .{
+                            .lineno = line.lineno,
+                            .message = "Invalid indentation of multi-line string",
+                        },
+                    };
+                return error.InvalidIndentation;
+            }
             // String must be copied as it's not contiguous in-file.
             if (is_last_line)
                 try writer.writeAll(std.mem.trimRight(u8, str_line.value, &[_]u8{ '\n', '\r' }))
@@ -467,9 +509,27 @@ pub const Parser = struct {
         const depth = lines.peekNext().?.kind.List.depth;
 
         while (lines.next()) |line| {
-            if (line.kind != .List) return error.InvalidItem;
+            if (line.kind != .List) {
+                if (p.diags) |diags|
+                    diags.* = .{
+                        .ParseError = .{
+                            .lineno = line.lineno,
+                            .message = "Invalid line type following list item",
+                        },
+                    };
+                return error.InvalidItem;
+            }
             const list_line = line.kind.List;
-            if (list_line.depth > depth) return error.InvalidIndentation;
+            if (list_line.depth > depth) {
+                if (p.diags) |diags|
+                    diags.* = .{
+                        .ParseError = .{
+                            .lineno = line.lineno,
+                            .message = "Invalid indentation following list item",
+                        },
+                    };
+                return error.InvalidIndentation;
+            }
 
             var value: Value = undefined;
             if (list_line.value) |str| {
@@ -494,9 +554,27 @@ pub const Parser = struct {
         const depth = lines.peekNext().?.kind.Object.depth;
 
         while (lines.next()) |line| {
-            if (line.kind != .Object) return error.InvalidItem;
+            if (line.kind != .Object) {
+                if (p.diags) |diags|
+                    diags.* = .{
+                        .ParseError = .{
+                            .lineno = line.lineno,
+                            .message = "Invalid line type following object item",
+                        },
+                    };
+                return error.InvalidItem;
+            }
             const obj_line = line.kind.Object;
-            if (obj_line.depth > depth) return error.InvalidIndentation;
+            if (obj_line.depth > depth) {
+                if (p.diags) |diags|
+                    diags.* = .{
+                        .ParseError = .{
+                            .lineno = line.lineno,
+                            .message = "Invalid indentation following object item",
+                        },
+                    };
+                return error.InvalidIndentation;
+            }
 
             var value: Value = undefined;
             if (obj_line.value) |str| {
@@ -528,7 +606,7 @@ test "parse empty" {
     var tree = try p.parse("");
     defer tree.deinit();
 
-    testing.expectEqual(Value{.String=""}, tree.root);
+    testing.expectEqual(Value{ .String = "" }, tree.root);
 }
 
 test "basic parse: string" {
@@ -600,6 +678,24 @@ test "nested parse: object inside object" {
     testing.expectEqualStrings("", map.get("baz").?.String);
     testing.expectEqualStrings("2", map.get("bar").?.Object.get("nest1").?.String);
     testing.expectEqualStrings("3", map.get("bar").?.Object.get("nest2").?.String);
+}
+
+test "failed parse: multi-line string indent" {
+    var p = Parser.init(testing.allocator, .{});
+    var diags: Parser.Diags = undefined;
+    p.diags = &diags;
+
+    const s =
+        \\ > foo
+        \\   > bar
+    ;
+
+    testing.expectError(error.InvalidIndentation, p.parse(s));
+    testing.expectEqual(@as(usize, 2), diags.ParseError.lineno);
+    testing.expectEqualStrings(
+        "Invalid indentation of multi-line string",
+        diags.ParseError.message,
+    );
 }
 
 test "stringify: empty" {
