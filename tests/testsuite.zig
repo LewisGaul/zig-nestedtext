@@ -7,6 +7,8 @@ const nestedtext = @import("nestedtext");
 const Allocator = std.mem.Allocator;
 const Dir = std.fs.Dir;
 
+const logger = std.log.scoped(.testsuite);
+
 const testcases_path = "tests/official_tests/test_cases/";
 
 const max_file_size: usize = 1024 * 1024;
@@ -39,6 +41,10 @@ const skipped_testcases = [_][]const u8{
     "string_multiline_11", // Whitespace in object key (bug...)
 };
 
+var passed: usize = 0;
+var skipped: usize = 0;
+var failed: usize = 0;
+
 const fail_fast = false;
 
 const ParseErrorInfo = struct {
@@ -65,13 +71,13 @@ fn readFileIfExists(dir: Dir, allocator: *Allocator, file_path: []const u8) !?[]
 }
 
 fn testParseSuccess(input_nt: []const u8, expected_json: []const u8) !void {
-    std.debug.print("DEBUG: Checking for parsing success\n", .{});
+    logger.debug("Checking for parsing success", .{});
     var p = nestedtext.Parser.init(testing.allocator, .{});
     var diags: nestedtext.Parser.Diags = undefined;
     p.diags = &diags;
     var nt_tree = p.parse(input_nt) catch |e| {
-        std.debug.print(
-            "ERROR: {s} (line {d})\n",
+        logger.err(
+            "{s} (line {d})",
             .{ diags.ParseError.message, diags.ParseError.lineno },
         );
         return e;
@@ -88,22 +94,22 @@ fn testParseSuccess(input_nt: []const u8, expected_json: []const u8) !void {
 }
 
 fn testParseError(input_nt: []const u8, expected_error: ParseErrorInfo) !void {
-    std.debug.print("DEBUG: Checking for parsing error\n", .{});
+    logger.debug("Checking for parsing error", .{});
     var p = nestedtext.Parser.init(testing.allocator, .{});
     var diags: nestedtext.Parser.Diags = undefined;
     p.diags = &diags;
-    // Hacky way to check whether the result was an error...
+    // TODO: Use std.meta.isError() (Zig 0.8).
     if (p.parse(input_nt)) |tree| {
         tree.deinit();
         return error.UnexpectedParseSuccess;
     } else |_| {}
-    std.debug.print("DEBUG: Got parse error: {s}\n", .{diags.ParseError.message});
+    logger.debug("Got parse error: {s}", .{diags.ParseError.message});
     testing.expectEqual(expected_error.lineno, diags.ParseError.lineno);
     // TODO: Check message.
 }
 
 fn testDumpSuccess(input_json: []const u8, expected_nt: []const u8) !void {
-    std.debug.print("DEBUG: Checking for dumping success\n", .{});
+    logger.debug("Checking for dumping success", .{});
     var json_parser = json.Parser.init(testing.allocator, false);
     defer json_parser.deinit();
     var json_tree = try json_parser.parse(input_json);
@@ -116,8 +122,8 @@ fn testDumpSuccess(input_json: []const u8, expected_nt: []const u8) !void {
     try nt_tree.root.stringify(.{}, buffer.writer());
 
     // TODO: Not working because of unordered JSON parsing in std.
-    std.debug.print(
-        "WARN: Skipping checking dumped output (std.json ignores JSON object order)\n",
+    logger.warn(
+        "Skipping checking dumped output (std.json ignores JSON object order)",
         .{},
     );
     // testing.expectEqualStrings(expected_nt, buffer.items);
@@ -137,7 +143,7 @@ fn testSingle(allocator: *Allocator, dir: std.fs.Dir) !void {
             defer json.parseFree(ParseErrorInfo, err_json, json_parse_opts);
             try testParseError(input, err_json);
         } else {
-            std.debug.print("ERROR: Expected one of 'load_out.json' or 'load_err.json'\n", .{});
+            logger.err("Expected one of 'load_out.json' or 'load_err.json'", .{});
             return error.InvalidTestcase;
         }
         tested_something = true;
@@ -148,16 +154,16 @@ fn testSingle(allocator: *Allocator, dir: std.fs.Dir) !void {
             const expected = std.mem.trimRight(u8, dump_out, "\r\n");
             try testDumpSuccess(input, expected);
         } else if (try readFileIfExists(dir, allocator, "dump_err.json")) |load_err| {
-            std.debug.print("WARN: Checking dump errors not yet implemented\n", .{});
+            logger.warn("Checking dump errors not yet implemented", .{});
         } else {
-            std.debug.print("ERROR: Expected one of 'dump_out.nt' or 'dump_err.json'\n", .{});
+            logger.err("Expected one of 'dump_out.nt' or 'dump_err.json'", .{});
             return error.InvalidTestcase;
         }
         tested_something = true;
     }
 
     if (!tested_something) {
-        std.debug.print("WARN: Nothing found to test\n", .{});
+        logger.warn("Nothing found to test", .{});
     }
 }
 
@@ -169,14 +175,14 @@ fn skipTestcase(name: []const u8) bool {
 }
 
 /// Returns the number of testcases that failed.
-fn testAll(base_dir: std.fs.Dir) !usize {
-    var num_failures: usize = 0;
+fn testAll(base_dir: std.fs.Dir) !void {
     std.debug.print("\n", .{});
     var iter = base_dir.iterate();
     while (try iter.next()) |*entry| {
         std.debug.assert(entry.kind == .Directory);
         if (skipTestcase(entry.name)) {
-            std.debug.print("INFO: Skipping testcase: {s}\n\n", .{entry.name});
+            std.debug.print("--- Skipping testcase: {s} ---\n\n", .{entry.name});
+            skipped += 1;
             continue;
         }
         var dir = try base_dir.openDir(entry.name, .{});
@@ -186,25 +192,22 @@ fn testAll(base_dir: std.fs.Dir) !usize {
         defer arena.deinit();
         testSingle(&arena.allocator, dir) catch |e| {
             std.debug.print("--- Testcase failed: {} ---\n\n", .{e});
-            num_failures += 1;
+            failed += 1;
             if (fail_fast) return e else continue;
         };
         std.debug.print("--- Testcase passed ---\n\n", .{});
+        passed += 1;
     }
-    return num_failures;
 }
 
 test "All testcases" {
+    std.testing.log_level = .debug;
+    std.debug.print("\n", .{});
     var testcases_dir = try std.fs.cwd().openDir(testcases_path, .{ .iterate = true });
     defer testcases_dir.close();
-    const failures = try testAll(testcases_dir);
-    std.debug.print("\n", .{});
-    if (failures == 0 and skipped_testcases.len == 0)
-        std.debug.print("All testcases passed!\n", .{});
-    if (skipped_testcases.len > 0)
-        std.debug.print("{d} testcases skipped\n", .{skipped_testcases.len});
-    if (failures > 0) {
-        std.debug.print("{d} testcases failed\n", .{failures});
-        testing.expect(false);
-    }
+    try testAll(testcases_dir);
+    std.debug.print("{d} testcases passed\n", .{passed});
+    std.debug.print("{d} testcases skipped\n", .{skipped});
+    std.debug.print("{d} testcases failed\n", .{failed});
+    if (failed > 0) testing.expect(false);
 }
