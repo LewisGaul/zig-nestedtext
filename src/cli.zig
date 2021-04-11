@@ -1,5 +1,6 @@
 const std = @import("std");
 const json = std.json;
+const time = std.time;
 
 const clap = @import("clap");
 
@@ -7,8 +8,15 @@ const nestedtext = @import("nestedtext.zig");
 
 const WriteError = std.os.WriteError;
 const File = std.fs.File;
+const Allocator = std.mem.Allocator;
 
-const allocator = std.heap.page_allocator;
+var allocator: *Allocator = undefined;
+
+const logger = std.log.scoped(.cli);
+// pub const log_level = std.log.Level.debug;
+
+// Time that the program starts (milliseconds since epoch).
+var start: i64 = undefined;
 
 const Format = enum {
     NestedText,
@@ -21,6 +29,10 @@ const Args = struct {
     input_format: Format = .NestedText,
     output_format: Format = .Json,
 };
+
+fn elapsed() i64 {
+    return time.milliTimestamp() - start;
+}
 
 // -----------------------------------------------------------------------------
 // Main
@@ -111,6 +123,8 @@ fn parseArgs() !Args {
 fn mainWorker() WriteError!u8 {
     var stderr = std.io.getStdErr().writer();
 
+    logger.debug("{d:6} Starting up", .{elapsed()});
+
     const args = parseArgs() catch |err| switch (err) {
         error.InvalidArgument,
         error.MissingValue,
@@ -119,10 +133,11 @@ fn mainWorker() WriteError!u8 {
         => return 2,
         else => return 1,
     };
+    logger.debug("{d:6} Parsed args", .{elapsed()});
 
     const max_size = 1024 * 1024 * 1024; // 1GB
     const input = args.input_file.readToEndAlloc(
-        std.heap.page_allocator,
+        allocator,
         max_size,
     ) catch |err| switch (err) {
         error.FileTooBig => {
@@ -134,13 +149,12 @@ fn mainWorker() WriteError!u8 {
             return 1;
         },
     };
+    logger.debug("{d:6} Finished reading input", .{elapsed()});
 
+    const out_stream = std.io.bufferedWriter(args.output_file.writer()).writer();
     switch (args.input_format) {
         .NestedText => {
-            var parser = nestedtext.Parser.init(
-                std.heap.page_allocator,
-                .{ .copy_strings = false },
-            );
+            var parser = nestedtext.Parser.init(allocator, .{ .copy_strings = false });
             var diags: nestedtext.Parser.Diags = undefined;
             parser.diags = &diags;
             const tree = parser.parse(input) catch |err| {
@@ -157,42 +171,45 @@ fn mainWorker() WriteError!u8 {
                 }
                 return 1;
             };
-            defer tree.deinit();
+            logger.debug("{d:6} Parsed NestedText", .{elapsed()});
 
             switch (args.output_format) {
                 .Json => {
-                    var json_tree = tree.root.toJson(std.heap.page_allocator) catch {
+                    var json_tree = tree.root.toJson(allocator) catch {
                         try stderr.writeAll("Failed to convert NestedText to JSON\n");
                         return 1;
                     };
-                    defer json_tree.deinit();
-                    try json_tree.root.jsonStringify(.{}, args.output_file.writer());
+                    logger.debug("{d:6} Converted to JSON", .{elapsed()});
+                    try json_tree.root.jsonStringify(.{}, out_stream);
+                    logger.debug("{d:6} Stringified JSON", .{elapsed()});
                 },
                 .NestedText => {
-                    try tree.root.stringify(.{}, args.output_file.writer());
+                    try tree.root.stringify(.{}, out_stream);
+                    logger.debug("{d:6} Stringified NestedText", .{elapsed()});
                 },
             }
         },
         .Json => {
-            var parser = json.Parser.init(std.heap.page_allocator, false);
-            defer parser.deinit();
+            var parser = json.Parser.init(allocator, false);
             var tree = parser.parse(input) catch {
                 try stderr.writeAll("Failed to parse input as JSON\n");
                 return 1;
             };
-            defer tree.deinit();
+            logger.debug("{d:6} Parsed JSON", .{elapsed()});
 
             switch (args.output_format) {
                 .Json => {
-                    try tree.root.jsonStringify(.{}, args.output_file.writer());
+                    try tree.root.jsonStringify(.{}, out_stream);
+                    logger.debug("{d:6} Stringified JSON", .{elapsed()});
                 },
                 .NestedText => {
-                    var nt_tree = nestedtext.fromJson(std.heap.page_allocator, tree.root) catch {
+                    var nt_tree = nestedtext.fromJson(allocator, tree.root) catch {
                         try stderr.writeAll("Failed to convert JSON to NestedText\n");
                         return 1;
                     };
-                    defer nt_tree.deinit();
-                    try nt_tree.root.stringify(.{}, args.output_file.writer());
+                    logger.debug("{d:6} Converted to NestedText", .{elapsed()});
+                    try nt_tree.root.stringify(.{}, out_stream);
+                    logger.debug("{d:6} Stringified NestedText", .{elapsed()});
                 },
             }
         },
@@ -202,5 +219,12 @@ fn mainWorker() WriteError!u8 {
 }
 
 pub fn main() u8 {
-    return mainWorker() catch 1;
+    start = time.milliTimestamp();
+    // Use an arena allocator - no need to free memory as we go.
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    allocator = &arena.allocator;
+    const rc = mainWorker() catch 1;
+    logger.debug("{d:6} Exiting with: {d}", .{ elapsed(), rc });
+    return rc;
 }

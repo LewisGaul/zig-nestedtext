@@ -9,6 +9,8 @@ const ArrayList = std.ArrayList;
 const StringArrayHashMap = std.StringArrayHashMap;
 const Writer = std.io.Writer;
 
+const logger = std.log.scoped(.nestedtext);
+
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
@@ -340,6 +342,7 @@ pub const Parser = struct {
         //       the string slices are from the input and owned by the caller.
         const lines = try p.parseLines(input);
         defer lines.deinit();
+        logger.debug("Parsed {d} lines", .{lines.items.len});
 
         var iter = LinesIter.init(lines);
 
