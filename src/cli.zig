@@ -151,7 +151,8 @@ fn mainWorker() WriteError!u8 {
     };
     logger.debug("{d:6} Finished reading input", .{elapsed()});
 
-    const out_stream = std.io.bufferedWriter(args.output_file.writer()).writer();
+    var buffered_writer = std.io.bufferedWriter(args.output_file.writer());
+    const out_stream = buffered_writer.writer();
     switch (args.input_format) {
         .NestedText => {
             var parser = nestedtext.Parser.init(allocator, .{ .copy_strings = false });
@@ -214,6 +215,7 @@ fn mainWorker() WriteError!u8 {
             }
         },
     }
+    try buffered_writer.flush();
 
     return 0;
 }
