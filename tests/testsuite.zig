@@ -17,32 +17,21 @@ const skipped_testcases = [_][]const u8{
     "dict_02", // Bug? (should error when dumping keys with newlines)
     "dict_03", // Weird object keys (bug?)
     "dict_05", // Root-level leading whitespace (bug...)
-    "dict_06", // Bug (whitespace object value?)
     "dict_07", // Bug (tab indentation)
     "dict_14", // Bug (handle duplicate keys)
     "dict_15", // Bug (tab indentation)
-    "dict_16", // Bug (colon in key, empty value)
     "dict_17", // Key quoting - to be removed from spec
-    "dict_18", // Whitespace in object key (bug...)
-    "dict_19", // Bug (allow trailing whitespace after object keys)
     "dict_20", // Weird object keys (bug...)
     "dict_21", // Unrepresentable
     "dict_22", // Unrepresentable
-    "dict_23", // Bug (allow trailing whitespace after object keys)
+    "dict_23", // Key quoting - to be removed from spec
     "empty_1", // Bad testcase - empty file maps to null??
-    "holistic_1", // Whitespace in object key (bug...)
-    "holistic_4", // Whitespace in object key (bug...)
-    "holistic_6", // Whitespace in object key (bug...)
-    "holistic_7", // Bug (allow trailing whitespace after object keys)
+    "holistic_1", // Key quoting - to be removed from spec
     "list_5", // Root-level leading whitespace (bug...)
     "list_7", // Bug (tab indentation)
-    "string_1", // Whitespace in object key (bug...)
-    "string_9", // Whitespace in object key (bug...)
-    "string_multiline_04", // Whitespace in object key (bug...)
     "string_multiline_07", // Root-level leading whitespace (bug...)
     "string_multiline_08", // Bug (tab indentation)
     "string_multiline_09", // Bug (tab indentation)
-    "string_multiline_11", // Whitespace in object key (bug...)
 };
 
 var passed: usize = 0;

@@ -32,7 +32,7 @@ fn readline(input: []const u8) ?[]const u8 {
         if (input[idx] == '\r') {
             idx += 1;
             // Handle '\r\n'
-            if (input.len >= idx and input[idx] == '\n') idx += 1;
+            if (input.len > idx and input[idx] == '\n') idx += 1;
             break;
         }
         idx += 1;
@@ -429,13 +429,11 @@ pub const Parser = struct {
     fn parseObject(text: []const u8) ?[2]?[]const u8 {
         // TODO: Handle edge cases!
         for (text) |char, i| {
-            if (char == ' ') return null;
             if (char == ':') {
-                // Assume first colon found is the key-value separator, and
-                // expect a space character to follow if anything.
-                if (text.len > i + 1 and text[i + 1] != ' ') return null;
+                if (text.len > i + 1 and text[i + 1] != ' ') continue;
+                const key = std.mem.trim(u8, text[0..i], " \t");
                 const value = if (text.len > i + 2) text[i + 2 ..] else null;
-                return [_]?[]const u8{ text[0..i], value };
+                return [_]?[]const u8{ key, value };
             }
         }
         return null;
