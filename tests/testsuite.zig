@@ -14,12 +14,11 @@ const testcases_path = "tests/official_tests/test_cases/";
 const max_file_size: usize = 1024 * 1024;
 
 const skipped_testcases = [_][]const u8{
-    "dict_02", // Bug? (dumping keys with newlines)
-    "dict_03", // Weird object keys (bug?)
+    "dict_02", // Bug (dumping keys with newlines)
+    "dict_03", // Key quoting - to be removed from spec
     "dict_05", // Root-level leading whitespace (bug...)
     "dict_14", // Bug (handle duplicate keys)
     "dict_17", // Key quoting - to be removed from spec
-    "dict_20", // Weird object keys (bug...)
     "dict_21", // Unrepresentable
     "dict_22", // Unrepresentable
     "dict_23", // Key quoting - to be removed from spec
