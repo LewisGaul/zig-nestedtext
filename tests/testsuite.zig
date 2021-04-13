@@ -14,12 +14,10 @@ const testcases_path = "tests/official_tests/test_cases/";
 const max_file_size: usize = 1024 * 1024;
 
 const skipped_testcases = [_][]const u8{
-    "dict_02", // Bug? (should error when dumping keys with newlines)
+    "dict_02", // Bug? (dumping keys with newlines)
     "dict_03", // Weird object keys (bug?)
     "dict_05", // Root-level leading whitespace (bug...)
-    "dict_07", // Bug (tab indentation)
     "dict_14", // Bug (handle duplicate keys)
-    "dict_15", // Bug (tab indentation)
     "dict_17", // Key quoting - to be removed from spec
     "dict_20", // Weird object keys (bug...)
     "dict_21", // Unrepresentable
@@ -28,10 +26,7 @@ const skipped_testcases = [_][]const u8{
     "empty_1", // Bad testcase - empty file maps to null??
     "holistic_1", // Key quoting - to be removed from spec
     "list_5", // Root-level leading whitespace (bug...)
-    "list_7", // Bug (tab indentation)
     "string_multiline_07", // Root-level leading whitespace (bug...)
-    "string_multiline_08", // Bug (tab indentation)
-    "string_multiline_09", // Bug (tab indentation)
 };
 
 var passed: usize = 0;

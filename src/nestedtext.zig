@@ -46,6 +46,7 @@ fn readline(input: []const u8) ?[]const u8 {
 
 pub const ParseError = error{
     InvalidIndentation,
+    TabIndentation,
     InvalidItem,
     UnrecognisedLine,
 };
@@ -358,6 +359,7 @@ pub const Parser = struct {
     /// struct instance containing relevant info.
     fn parseLines(p: Self, input: []const u8) !ArrayList(Line) {
         var lines_array = ArrayList(Line).init(p.allocator);
+        errdefer lines_array.deinit();
         var buf_idx: usize = 0;
         var lineno: usize = 0;
         while (readline(input[buf_idx..])) |full_line| {
@@ -366,28 +368,36 @@ pub const Parser = struct {
             lineno += 1;
             var kind: LineType = undefined;
 
-            // TODO: Check leading space is entirely made up of space characters.
-            const stripped = std.mem.trimLeft(u8, text, &[_]u8{ ' ', '\t' });
+            // Trim spaces and tabs separately to check tabs are not used in
+            // indentation of non-ignored lines.
+            const stripped = std.mem.trimLeft(u8, text, " ");
+            const tab_stripped = std.mem.trimLeft(u8, text, " \t");
             const depth = text.len - stripped.len;
-            if (stripped.len == 0) {
+            if (tab_stripped.len == 0) {
                 kind = .Blank;
-            } else if (stripped[0] == '#') {
+            } else if (tab_stripped[0] == '#') {
                 kind = .Comment;
-            } else if (parseString(stripped)) |index| {
+            } else if (parseString(tab_stripped)) |index| {
+                if (tab_stripped.len < stripped.len)
+                    return p.handleTabIndentation(lineno);
                 kind = .{
                     .String = .{
                         .depth = depth,
                         .value = full_line[text.len - stripped.len + index ..],
                     },
                 };
-            } else if (parseList(stripped)) |value| {
+            } else if (parseList(tab_stripped)) |value| {
+                if (tab_stripped.len < stripped.len)
+                    return p.handleTabIndentation(lineno);
                 kind = .{
                     .List = .{
                         .depth = depth,
                         .value = if (value.len > 0) value else null,
                     },
                 };
-            } else if (parseObject(stripped)) |result| {
+            } else if (parseObject(tab_stripped)) |result| {
+                if (tab_stripped.len < stripped.len)
+                    return p.handleTabIndentation(lineno);
                 kind = .{
                     .Object = .{
                         .depth = depth,
@@ -437,6 +447,18 @@ pub const Parser = struct {
             }
         }
         return null;
+    }
+
+    fn handleTabIndentation(p: Self, lineno: usize) ParseError {
+        if (p.diags) |diags| {
+            diags.* = Diags{
+                .ParseError = .{
+                    .lineno = lineno,
+                    .message = "Tabs not allowed in indentation of non-ignored lines",
+                },
+            };
+        }
+        return error.TabIndentation;
     }
 
     fn readValue(p: Self, allocator: *Allocator, lines: *LinesIter) anyerror!Value {
