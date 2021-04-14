@@ -451,14 +451,7 @@ pub const Parser = struct {
     }
 
     fn handleTabIndentation(p: Self, lineno: usize) ParseError {
-        if (p.diags) |diags| {
-            diags.* = Diags{
-                .ParseError = .{
-                    .lineno = lineno,
-                    .message = "Tabs not allowed in indentation of non-ignored lines",
-                },
-            };
-        }
+        p.maybeStoreDiags(lineno, "Tabs not allowed in indentation of non-ignored lines");
         return error.TabIndentation;
     }
 
@@ -471,13 +464,7 @@ pub const Parser = struct {
             .List => .{ .List = try p.readList(allocator, lines) },
             .Object => .{ .Object = try p.readObject(allocator, lines) },
             .Unrecognised => {
-                if (p.diags) |diags|
-                    diags.* = .{
-                        .ParseError = .{
-                            .lineno = next_line.lineno,
-                            .message = "Unrecognised line type",
-                        },
-                    };
+                p.maybeStoreDiags(next_line.lineno, "Unrecognised line type");
                 return error.UnrecognisedLine;
             },
             .Blank, .Comment => unreachable, // Skipped by iterator
@@ -494,25 +481,16 @@ pub const Parser = struct {
 
         while (lines.next()) |line| {
             if (line.kind != .String) {
-                if (p.diags) |diags|
-                    diags.* = .{
-                        .ParseError = .{
-                            .lineno = line.lineno,
-                            .message = "Invalid line type following multi-line string",
-                        },
-                    };
+                p.maybeStoreDiags(
+                    line.lineno,
+                    "Invalid line type following multi-line string",
+                );
                 return error.InvalidItem;
             }
             const is_last_line = lines.peekNextDepth() == null or lines.peekNextDepth().? < depth;
             const str_line = line.kind.String;
             if (str_line.depth > depth) {
-                if (p.diags) |diags|
-                    diags.* = .{
-                        .ParseError = .{
-                            .lineno = line.lineno,
-                            .message = "Invalid indentation of multi-line string",
-                        },
-                    };
+                p.maybeStoreDiags(line.lineno, "Invalid indentation of multi-line string");
                 return error.InvalidIndentation;
             }
             // String must be copied as it's not contiguous in-file.
@@ -534,24 +512,12 @@ pub const Parser = struct {
 
         while (lines.next()) |line| {
             if (line.kind != .List) {
-                if (p.diags) |diags|
-                    diags.* = .{
-                        .ParseError = .{
-                            .lineno = line.lineno,
-                            .message = "Invalid line type following list item",
-                        },
-                    };
+                p.maybeStoreDiags(line.lineno, "Invalid line type following list item");
                 return error.InvalidItem;
             }
             const list_line = line.kind.List;
             if (list_line.depth > depth) {
-                if (p.diags) |diags|
-                    diags.* = .{
-                        .ParseError = .{
-                            .lineno = line.lineno,
-                            .message = "Invalid indentation following list item",
-                        },
-                    };
+                p.maybeStoreDiags(line.lineno, "Invalid indentation following list item");
                 return error.InvalidIndentation;
             }
 
@@ -579,24 +545,12 @@ pub const Parser = struct {
 
         while (lines.next()) |line| {
             if (line.kind != .Object) {
-                if (p.diags) |diags|
-                    diags.* = .{
-                        .ParseError = .{
-                            .lineno = line.lineno,
-                            .message = "Invalid line type following object item",
-                        },
-                    };
+                p.maybeStoreDiags(line.lineno, "Invalid line type following object item");
                 return error.InvalidItem;
             }
             const obj_line = line.kind.Object;
             if (obj_line.depth > depth) {
-                if (p.diags) |diags|
-                    diags.* = .{
-                        .ParseError = .{
-                            .lineno = line.lineno,
-                            .message = "Invalid indentation following object item",
-                        },
-                    };
+                p.maybeStoreDiags(line.lineno, "Invalid indentation following object item");
                 return error.InvalidIndentation;
             }
             if (map.contains(obj_line.key)) {
@@ -604,13 +558,7 @@ pub const Parser = struct {
                     .UseFirst => continue,
                     .UseLast => {},
                     .Error => {
-                        if (p.diags) |diags|
-                            diags.* = .{
-                                .ParseError = .{
-                                    .lineno = line.lineno,
-                                    .message = "Duplicate object key",
-                                },
-                            };
+                        p.maybeStoreDiags(line.lineno, "Duplicate object key");
                         return error.DuplicateKey;
                     },
                 }
@@ -633,6 +581,16 @@ pub const Parser = struct {
 
     fn maybeDupString(p: Self, allocator: *Allocator, string: []const u8) ![]const u8 {
         return if (p.options.copy_strings) try allocator.dupe(u8, string) else string;
+    }
+
+    fn maybeStoreDiags(p: Self, lineno: usize, message: []const u8) void {
+        if (p.diags) |diags|
+            diags.* = .{
+                .ParseError = .{
+                    .lineno = lineno,
+                    .message = message,
+                },
+            };
     }
 };
 
