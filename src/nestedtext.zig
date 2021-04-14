@@ -49,6 +49,7 @@ pub const ParseError = error{
     TabIndentation,
     InvalidItem,
     UnrecognisedLine,
+    DuplicateKey,
 };
 
 const StringifyOptions = struct {
@@ -597,6 +598,22 @@ pub const Parser = struct {
                         },
                     };
                 return error.InvalidIndentation;
+            }
+            if (map.contains(obj_line.key)) {
+                switch (p.options.duplicate_field_behavior) {
+                    .UseFirst => continue,
+                    .UseLast => {},
+                    .Error => {
+                        if (p.diags) |diags|
+                            diags.* = .{
+                                .ParseError = .{
+                                    .lineno = line.lineno,
+                                    .message = "Duplicate object key",
+                                },
+                            };
+                        return error.DuplicateKey;
+                    },
+                }
             }
 
             var value: Value = undefined;

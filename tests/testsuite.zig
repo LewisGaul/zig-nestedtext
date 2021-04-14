@@ -17,7 +17,6 @@ const skipped_testcases = [_][]const u8{
     "dict_02", // Bug (dumping keys with newlines)
     "dict_03", // Key quoting - to be removed from spec
     "dict_05", // Root-level leading whitespace (bug...)
-    "dict_14", // Bug (handle duplicate keys)
     "dict_17", // Key quoting - to be removed from spec
     "dict_21", // Unrepresentable
     "dict_22", // Unrepresentable
@@ -26,6 +25,7 @@ const skipped_testcases = [_][]const u8{
     "holistic_1", // Key quoting - to be removed from spec
     "list_5", // Root-level leading whitespace (bug...)
     "string_multiline_07", // Root-level leading whitespace (bug...)
+    // TODO: Add testcase for mismatching indentation depth
 };
 
 var passed: usize = 0;
