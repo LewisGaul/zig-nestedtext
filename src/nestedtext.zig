@@ -435,7 +435,10 @@ pub const Parser = struct {
                 return error.UnrecognisedLine;
             },
             .InvalidTabIndent => {
-                p.maybeStoreDiags(next_line.lineno, "Tabs not allowed in indentation of non-ignored lines");
+                p.maybeStoreDiags(
+                    next_line.lineno,
+                    "Tabs not allowed in indentation of non-ignored lines",
+                );
                 return error.TabIndentation;
             },
             .Blank, .Comment => unreachable, // Skipped by iterator
