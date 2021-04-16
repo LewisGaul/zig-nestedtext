@@ -264,6 +264,7 @@ pub const Parser = struct {
         List: struct { depth: usize, value: ?[]const u8 },
         Object: struct { depth: usize, key: []const u8, value: ?[]const u8 },
         Unrecognised,
+        InvalidTabIndent,
     };
 
     const Line = struct {
@@ -273,25 +274,24 @@ pub const Parser = struct {
     };
 
     const LinesIter = struct {
-        next_idx: usize,
-        lines: ArrayList(Line),
+        text: []const u8,
+        idx: usize = 0,
+        next_line: ?Line = null,
 
-        pub fn init(lines: ArrayList(Line)) LinesIter {
-            var self = LinesIter{ .next_idx = 0, .lines = lines };
-            self.skipIgnorableLines();
+        pub fn init(text: []const u8) LinesIter {
+            var self = LinesIter{ .text = text };
+            self.advanceToNextContentLine();
             return self;
         }
 
         pub fn next(self: *LinesIter) ?Line {
-            if (self.next_idx >= self.len()) return null;
-            const line = self.lines.items[self.next_idx];
+            const line = self.next_line;
             self.advanceToNextContentLine();
             return line;
         }
 
         pub fn peekNext(self: LinesIter) ?Line {
-            if (self.next_idx >= self.len()) return null;
-            return self.lines.items[self.next_idx];
+            return self.next_line;
         }
 
         pub fn peekNextDepth(self: LinesIter) ?usize {
@@ -304,22 +304,97 @@ pub const Parser = struct {
             };
         }
 
-        fn len(self: LinesIter) usize {
-            return self.lines.items.len;
-        }
-
         fn advanceToNextContentLine(self: *LinesIter) void {
-            self.next_idx += 1;
-            self.skipIgnorableLines();
-        }
-
-        fn skipIgnorableLines(self: *LinesIter) void {
-            while (self.next_idx < self.len()) {
-                switch (self.lines.items[self.next_idx].kind) {
-                    .Blank, .Comment => self.next_idx += 1,
+            while (readline(self.text[self.idx..])) |full_line| {
+                const lineno = if (self.next_line) |line| line.lineno else 0;
+                const line = parseLine(full_line, lineno + 1);
+                self.next_line = line;
+                self.idx += full_line.len;
+                switch (line.kind) {
+                    .Blank, .Comment => {}, // continue
                     else => return,
                 }
             }
+            self.next_line = null;
+        }
+
+        fn parseLine(full_line: []const u8, lineno: usize) Line {
+            const text = std.mem.trimRight(u8, full_line, &[_]u8{ '\n', '\r' });
+            var kind: LineType = undefined;
+
+            // Trim spaces and tabs separately to check tabs are not used in
+            // indentation of non-ignored lines.
+            const stripped = std.mem.trimLeft(u8, text, " ");
+            const tab_stripped = std.mem.trimLeft(u8, text, " \t");
+            const depth = text.len - stripped.len;
+            if (tab_stripped.len == 0) {
+                kind = .Blank;
+            } else if (tab_stripped[0] == '#') {
+                kind = .Comment;
+            } else if (parseString(tab_stripped)) |index| {
+                kind = if (tab_stripped.len < stripped.len)
+                    .InvalidTabIndent
+                else
+                    .{
+                        .String = .{
+                            .depth = depth,
+                            .value = full_line[text.len - stripped.len + index ..],
+                        },
+                    };
+            } else if (parseList(tab_stripped)) |value| {
+                kind = if (tab_stripped.len < stripped.len)
+                    .InvalidTabIndent
+                else
+                    .{
+                        .List = .{
+                            .depth = depth,
+                            .value = if (value.len > 0) value else null,
+                        },
+                    };
+            } else if (parseObject(tab_stripped)) |result| {
+                kind = if (tab_stripped.len < stripped.len)
+                    .InvalidTabIndent
+                else
+                    .{
+                        .Object = .{
+                            .depth = depth,
+                            .key = result[0].?,
+                            // May be null if the value is on the following line(s).
+                            .value = result[1],
+                        },
+                    };
+            } else {
+                kind = .Unrecognised;
+            }
+            return .{ .text = text, .lineno = lineno, .kind = kind };
+        }
+
+        fn parseString(text: []const u8) ?usize {
+            assert(text.len > 0);
+            if (text[0] != '>') return null;
+            if (text.len == 1) return 1;
+            if (text[1] == ' ') return 2;
+            return null;
+        }
+
+        fn parseList(text: []const u8) ?[]const u8 {
+            assert(text.len > 0);
+            if (text[0] != '-') return null;
+            if (text.len == 1) return "";
+            if (text[1] == ' ') return text[2..];
+            return null;
+        }
+
+        fn parseObject(text: []const u8) ?[2]?[]const u8 {
+            for (text) |char, i| {
+                if (char == ':') {
+                    if (text.len > i + 1 and text[i + 1] != ' ') continue;
+                    const key = std.mem.trim(u8, text[0..i], " \t");
+                    const value = if (text.len > i + 2) text[i + 2 ..] else null;
+                    return [_]?[]const u8{ key, value };
+                }
+            }
+            return null;
         }
     };
 
@@ -337,122 +412,14 @@ pub const Parser = struct {
         tree.arena = ArenaAllocator.init(p.allocator);
         errdefer tree.deinit();
 
-        // TODO: This should be an iterator, i.e. don't loop over all lines
-        //       up front (unnecessary performance and memory cost). We should
-        //       only need access to the current (and next?) line.
-        //       Note that it's only the struct instances that are allocated,
-        //       the string slices are from the input and owned by the caller.
-        const lines = try p.parseLines(input);
-        defer lines.deinit();
-        logger.debug("Parsed {d} lines", .{lines.items.len});
+        var lines = LinesIter.init(input);
 
-        var iter = LinesIter.init(lines);
-
-        tree.root = if (iter.peekNext() != null)
-            try p.readValue(&tree.arena.allocator, &iter) // Recursively parse
+        tree.root = if (lines.peekNext() != null)
+            try p.readValue(&tree.arena.allocator, &lines) // Recursively parse
         else
             .{ .String = "" };
 
         return tree;
-    }
-
-    /// Split the given input into an array of lines, where each entry is a
-    /// struct instance containing relevant info.
-    fn parseLines(p: Self, input: []const u8) !ArrayList(Line) {
-        var lines_array = ArrayList(Line).init(p.allocator);
-        errdefer lines_array.deinit();
-        var buf_idx: usize = 0;
-        var lineno: usize = 0;
-        while (readline(input[buf_idx..])) |full_line| {
-            buf_idx += full_line.len;
-            const text = std.mem.trimRight(u8, full_line, &[_]u8{ '\n', '\r' });
-            lineno += 1;
-            var kind: LineType = undefined;
-
-            // Trim spaces and tabs separately to check tabs are not used in
-            // indentation of non-ignored lines.
-            const stripped = std.mem.trimLeft(u8, text, " ");
-            const tab_stripped = std.mem.trimLeft(u8, text, " \t");
-            const depth = text.len - stripped.len;
-            if (tab_stripped.len == 0) {
-                kind = .Blank;
-            } else if (tab_stripped[0] == '#') {
-                kind = .Comment;
-            } else if (parseString(tab_stripped)) |index| {
-                if (tab_stripped.len < stripped.len)
-                    return p.handleTabIndentation(lineno);
-                kind = .{
-                    .String = .{
-                        .depth = depth,
-                        .value = full_line[text.len - stripped.len + index ..],
-                    },
-                };
-            } else if (parseList(tab_stripped)) |value| {
-                if (tab_stripped.len < stripped.len)
-                    return p.handleTabIndentation(lineno);
-                kind = .{
-                    .List = .{
-                        .depth = depth,
-                        .value = if (value.len > 0) value else null,
-                    },
-                };
-            } else if (parseObject(tab_stripped)) |result| {
-                if (tab_stripped.len < stripped.len)
-                    return p.handleTabIndentation(lineno);
-                kind = .{
-                    .Object = .{
-                        .depth = depth,
-                        .key = result[0].?,
-                        // May be null if the value is on the following line(s).
-                        .value = result[1],
-                    },
-                };
-            } else {
-                kind = .Unrecognised;
-            }
-            try lines_array.append(
-                Line{
-                    .text = text,
-                    .lineno = lineno,
-                    .kind = kind,
-                },
-            );
-        }
-        return lines_array;
-    }
-
-    fn parseString(text: []const u8) ?usize {
-        assert(text.len > 0);
-        if (text[0] != '>') return null;
-        if (text.len == 1) return 1;
-        if (text[1] == ' ') return 2;
-        return null;
-    }
-
-    fn parseList(text: []const u8) ?[]const u8 {
-        assert(text.len > 0);
-        if (text[0] != '-') return null;
-        if (text.len == 1) return "";
-        if (text[1] == ' ') return text[2..];
-        return null;
-    }
-
-    fn parseObject(text: []const u8) ?[2]?[]const u8 {
-        // TODO: Handle edge cases!
-        for (text) |char, i| {
-            if (char == ':') {
-                if (text.len > i + 1 and text[i + 1] != ' ') continue;
-                const key = std.mem.trim(u8, text[0..i], " \t");
-                const value = if (text.len > i + 2) text[i + 2 ..] else null;
-                return [_]?[]const u8{ key, value };
-            }
-        }
-        return null;
-    }
-
-    fn handleTabIndentation(p: Self, lineno: usize) ParseError {
-        p.maybeStoreDiags(lineno, "Tabs not allowed in indentation of non-ignored lines");
-        return error.TabIndentation;
     }
 
     fn readValue(p: Self, allocator: *Allocator, lines: *LinesIter) anyerror!Value {
@@ -466,6 +433,10 @@ pub const Parser = struct {
             .Unrecognised => {
                 p.maybeStoreDiags(next_line.lineno, "Unrecognised line type");
                 return error.UnrecognisedLine;
+            },
+            .InvalidTabIndent => {
+                p.maybeStoreDiags(next_line.lineno, "Tabs not allowed in indentation of non-ignored lines");
+                return error.TabIndentation;
             },
             .Blank, .Comment => unreachable, // Skipped by iterator
         };
