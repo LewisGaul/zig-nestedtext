@@ -2,6 +2,8 @@
 
 A NestedText parser written in Zig 0.7 targeting [NestedText v1.3](https://nestedtext.org/en/v1.3/).
 
+See my [Zig NestedText Library](https://www.lewisgaul.co.uk/blog/coding/2021/04/18/zig-nestedtext/) blog post.
+
 
 ## Building and Usage
 
