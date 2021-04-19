@@ -1,14 +1,30 @@
 pkgs:
   nestedtext:
     version: 0.1.0
-    description: "Zig NestedText parser library - a simple human readable data format based on YAML"
-    license: MIT
+    description: Zig NestedText parser library - a simple human readable data format based on YAML
     source_url: "https://github.com/LewisGaul/zig-nestedtext"
-    tags:
-      nestedtext
-      parser
-
     root: src/nestedtext.zig
     files:
       README.md
       LICENSE
+    license: MIT
+    tags:
+      nestedtext
+      parser
+
+  nestedtext-cli:
+    version: 0.1.0
+    description: NestedText to JSON conversion tool. NestedText is a simple human readable data format based on YAML.
+    source_url: "https://github.com/LewisGaul/zig-nestedtext"
+    root: src/cli.zig
+    files:
+      README.md
+      LICENSE
+    license: MIT
+    tags:
+      nestedtext
+      json
+      cli
+    deps:
+      Hejsil/clap: ^0.3.0
+      LewisGaul/nestedtext: ^0.1.0
