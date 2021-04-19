@@ -43,7 +43,7 @@ pub fn build(b: *Builder) void {
     test_step.dependOn(&testsuite.step);
 
     const run_cmd = exe.run();
-    run_cmd.step.dependOn(&exe.step);  // TODO: Is this needed?
+    run_cmd.step.dependOn(&exe.step); // TODO: Is this needed?
 
     // Define the 'run' subcommand.
     const run_step = b.step("run", "Run the NestedText CLI");
