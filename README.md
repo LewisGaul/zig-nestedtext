@@ -1,5 +1,7 @@
 # zig-nestedtext
 
+[![Build badge](https://img.shields.io/github/workflow/status/LewisGaul/zig-nestedtext/Run%20tests/main)](https://github.com/LewisGaul/zig-nestedtext/actions/workflows/tests.yml?query=branch%3Amain)
+
 A NestedText parser written in Zig 0.7 targeting [NestedText v1.3](https://nestedtext.org/en/v1.3/).
 
 See my [Zig NestedText Library](https://www.lewisgaul.co.uk/blog/coding/2021/04/18/zig-nestedtext/) blog post.
