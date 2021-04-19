@@ -1,3 +1,6 @@
 zig-cache/
 *.code-workspace
 .idea/
+deps.zig
+.gyro/
+gyro.lock

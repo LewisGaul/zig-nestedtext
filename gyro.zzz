@@ -1,0 +1,14 @@
+pkgs:
+  nestedtext:
+    version: 0.1.0
+    description: "Zig NestedText parser library"
+    license: MIT
+    source_url: "https://github.com/LewisGaul/zig-nestedtext"
+    tags:
+      nestedtext
+      parser
+
+    root: src/nestedtext.zig
+    files:
+      README.md
+      LICENSE
