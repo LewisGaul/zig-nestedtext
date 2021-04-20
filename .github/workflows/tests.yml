@@ -17,7 +17,7 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Setup Zig
+      - name: Zig setup
         uses: goto-bus-stop/setup-zig@v1
         with:
           version: 0.7.1
