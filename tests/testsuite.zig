@@ -25,7 +25,6 @@ const skipped_testcases = [_][]const u8{
     "holistic_1", // Key quoting - to be removed from spec
     "list_5", // Root-level leading whitespace (bug...)
     "string_multiline_07", // Root-level leading whitespace (bug...)
-    // TODO: Add testcase for mismatching indentation depth
 };
 
 var passed: usize = 0;
