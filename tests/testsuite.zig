@@ -1,11 +1,12 @@
 const std = @import("std");
 const json = std.json;
 const testing = std.testing;
+const Allocator = std.mem.Allocator;
+const ArrayList = std.ArrayList;
+const Dir = std.fs.Dir;
+const print = std.debug.print;
 
 const nestedtext = @import("nestedtext");
-
-const Allocator = std.mem.Allocator;
-const Dir = std.fs.Dir;
 
 const logger = std.log.scoped(.testsuite);
 
@@ -27,10 +28,6 @@ const skipped_testcases = [_][]const u8{
     "string_multiline_07", // Root-level leading whitespace (bug...)
 };
 
-var passed: usize = 0;
-var skipped: usize = 0;
-var failed: usize = 0;
-
 const fail_fast = false;
 
 const ParseErrorInfo = struct {
@@ -38,6 +35,72 @@ const ParseErrorInfo = struct {
     colno: ?usize,
     message: []const u8,
 };
+
+// Modified std.testing functions
+// -----------------------------------------------------------------------------
+
+/// Slightly modified from std.testing to return error instead of panic.
+fn expectEqualStrings(expected: []const u8, actual: []const u8) !void {
+    if (std.mem.indexOfDiff(u8, actual, expected)) |diff_index| {
+        print("\n====== expected this output: =========\n", .{});
+        printWithVisibleNewlines(expected);
+        print("\n======== instead found this: =========\n", .{});
+        printWithVisibleNewlines(actual);
+        print("\n======================================\n", .{});
+
+        var diff_line_number: usize = 1;
+        for (expected[0..diff_index]) |value| {
+            if (value == '\n') diff_line_number += 1;
+        }
+        print("First difference occurs on line {}:\n", .{diff_line_number});
+
+        print("expected:\n", .{});
+        printIndicatorLine(expected, diff_index);
+
+        print("found:\n", .{});
+        printIndicatorLine(actual, diff_index);
+
+        return error.ExpectFailure;
+    }
+}
+
+fn printIndicatorLine(source: []const u8, indicator_index: usize) void {
+    const line_begin_index = if (std.mem.lastIndexOfScalar(u8, source[0..indicator_index], '\n')) |line_begin|
+        line_begin + 1
+    else
+        0;
+    const line_end_index = if (std.mem.indexOfScalar(u8, source[indicator_index..], '\n')) |line_end|
+        (indicator_index + line_end)
+    else
+        source.len;
+
+    printLine(source[line_begin_index..line_end_index]);
+    {
+        var i: usize = line_begin_index;
+        while (i < indicator_index) : (i += 1)
+            print(" ", .{});
+    }
+    print("^\n", .{});
+}
+
+fn printWithVisibleNewlines(source: []const u8) void {
+    var i: usize = 0;
+    while (std.mem.indexOf(u8, source[i..], "\n")) |nl| : (i += nl + 1) {
+        printLine(source[i .. i + nl]);
+    }
+    print("{}<ETX>\n", .{source[i..]}); // End of Text (ETX)
+}
+
+fn printLine(line: []const u8) void {
+    if (line.len != 0) switch (line[line.len - 1]) {
+        ' ', '\t' => print("{}<CR>\n", .{line}), // Carriage return
+        else => {},
+    };
+    print("{}\n", .{line});
+}
+
+// Helpers
+// -----------------------------------------------------------------------------
 
 /// Returned memory is owned by the caller.
 fn canonicaliseJson(allocator: *Allocator, json_input: []const u8) ![]const u8 {
@@ -55,6 +118,16 @@ fn readFileIfExists(dir: Dir, allocator: *Allocator, file_path: []const u8) !?[]
         else => return e,
     };
 }
+
+fn skipTestcase(name: []const u8) bool {
+    for (skipped_testcases) |skip| {
+        if (std.mem.eql(u8, name, skip)) return true;
+    }
+    return false;
+}
+
+// Testing mechanism
+// -----------------------------------------------------------------------------
 
 fn testParseSuccess(input_nt: []const u8, expected_json: []const u8) !void {
     logger.debug("Checking for parsing success", .{});
@@ -76,7 +149,7 @@ fn testParseSuccess(input_nt: []const u8, expected_json: []const u8) !void {
     defer buffer.deinit();
     try json_tree.root.jsonStringify(.{}, buffer.writer());
 
-    testing.expectEqualStrings(expected_json, buffer.items);
+    try expectEqualStrings(expected_json, buffer.items);
 }
 
 fn testParseError(input_nt: []const u8, expected_error: ParseErrorInfo) !void {
@@ -112,7 +185,7 @@ fn testDumpSuccess(input_json: []const u8, expected_nt: []const u8) !void {
         "Skipping checking dumped output (std.json ignores JSON object order)",
         .{},
     );
-    // testing.expectEqualStrings(expected_nt, buffer.items);
+    // try expectEqualStrings(expected_nt, buffer.items);
 }
 
 fn testSingle(allocator: *Allocator, dir: std.fs.Dir) !void {
@@ -140,6 +213,7 @@ fn testSingle(allocator: *Allocator, dir: std.fs.Dir) !void {
             const expected = std.mem.trimRight(u8, dump_out, "\r\n");
             try testDumpSuccess(input, expected);
         } else if (try readFileIfExists(dir, allocator, "dump_err.json")) |load_err| {
+            // TODO: Should be impossible?
             logger.warn("Checking dump errors not yet implemented", .{});
         } else {
             logger.err("Expected one of 'dump_out.nt' or 'dump_err.json'", .{});
@@ -153,46 +227,53 @@ fn testSingle(allocator: *Allocator, dir: std.fs.Dir) !void {
     }
 }
 
-fn skipTestcase(name: []const u8) bool {
-    for (skipped_testcases) |skip| {
-        if (std.mem.eql(u8, name, skip)) return true;
-    }
-    return false;
-}
-
 fn testAll(base_dir: std.fs.Dir) !void {
-    std.debug.print("\n", .{});
+    var passed: usize = 0;
+    var skipped: usize = 0;
+    var failed: usize = 0;
+    var failures = ArrayList([]const u8).init(testing.allocator);
+    defer failures.deinit();
+
+    print("\n", .{});
     var iter = base_dir.iterate();
     while (try iter.next()) |*entry| {
         std.debug.assert(entry.kind == .Directory);
         if (skipTestcase(entry.name)) {
-            std.debug.print("--- Skipping testcase: {s} ---\n\n", .{entry.name});
+            print("--- Skipping testcase: {s} ---\n\n", .{entry.name});
             skipped += 1;
             continue;
         }
         var dir = try base_dir.openDir(entry.name, .{});
         defer dir.close();
-        std.debug.print("--- Running testcase: {s} ---\n", .{entry.name});
+        print("--- Running testcase: {s} ---\n", .{entry.name});
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
         testSingle(&arena.allocator, dir) catch |e| {
-            std.debug.print("--- Testcase failed: {} ---\n\n", .{e});
+            print("--- Testcase failed: {} ---\n\n", .{e});
             failed += 1;
+            try failures.append(entry.name);
             if (fail_fast) return e else continue;
         };
-        std.debug.print("--- Testcase passed ---\n\n", .{});
+        print("--- Testcase passed ---\n\n", .{});
         passed += 1;
+    }
+
+    print("{d} testcases passed\n", .{passed});
+    print("{d} testcases skipped\n", .{skipped});
+    print("{d} testcases failed\n", .{failed});
+    if (failed > 0) {
+        print("\nFailed testcases:\n", .{});
+        for (failures.items) |name|
+            print(" {s}\n", .{name});
+        print("\n", .{});
+        testing.expect(false);
     }
 }
 
 test "All testcases" {
     std.testing.log_level = .debug;
-    std.debug.print("\n", .{});
+    print("\n", .{});
     var testcases_dir = try std.fs.cwd().openDir(testcases_path, .{ .iterate = true });
     defer testcases_dir.close();
     try testAll(testcases_dir);
-    std.debug.print("{d} testcases passed\n", .{passed});
-    std.debug.print("{d} testcases skipped\n", .{skipped});
-    std.debug.print("{d} testcases failed\n", .{failed});
-    if (failed > 0) testing.expect(false);
 }
