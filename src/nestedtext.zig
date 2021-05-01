@@ -261,16 +261,34 @@ pub const Parser = struct {
         Blank,
         Comment,
         String: struct { depth: usize, value: []const u8 },
-        List: struct { depth: usize, value: ?[]const u8 },
-        Object: struct { depth: usize, key: []const u8, value: ?[]const u8 },
+        ListItem: struct { depth: usize, value: ?[]const u8 },
+        ObjectItem: struct { depth: usize, key: []const u8, value: ?[]const u8 },
+        ObjectKey: struct { depth: usize, value: []const u8 },
         Unrecognised,
         InvalidTabIndent,
+
+        pub fn isObject(self: @This()) bool {
+            return switch (self) {
+                .ObjectItem, .ObjectKey => true,
+                else => false,
+            };
+        }
     };
 
     const Line = struct {
         text: []const u8,
         lineno: usize,
         kind: LineType,
+
+        pub fn getDepth(self: @This()) ?usize {
+            return switch (self.kind) {
+                .String => |k| k.depth,
+                .ListItem => |k| k.depth,
+                .ObjectItem => |k| k.depth,
+                .ObjectKey => |k| k.depth,
+                else => null,
+            };
+        }
     };
 
     const LinesIter = struct {
@@ -296,12 +314,7 @@ pub const Parser = struct {
 
         pub fn peekNextDepth(self: LinesIter) ?usize {
             if (self.peekNext() == null) return null;
-            return switch (self.peekNext().?.kind) {
-                .String => |k| k.depth,
-                .List => |k| k.depth,
-                .Object => |k| k.depth,
-                else => null,
-            };
+            return self.peekNext().?.getDepth();
         }
 
         fn advanceToNextContentLine(self: *LinesIter) void {
@@ -346,9 +359,20 @@ pub const Parser = struct {
                     .InvalidTabIndent
                 else
                     .{
-                        .List = .{
+                        .ListItem = .{
                             .depth = depth,
                             .value = if (value.len > 0) value else null,
+                        },
+                    };
+            } else if (parseObjectKey(tab_stripped)) |index| {
+                // Behaves just like string line.
+                kind = if (tab_stripped.len < stripped.len)
+                    .InvalidTabIndent
+                else
+                    .{
+                        .ObjectKey = .{
+                            .depth = depth,
+                            .value = full_line[text.len - stripped.len + index ..],
                         },
                     };
             } else if (parseObject(tab_stripped)) |result| {
@@ -356,7 +380,7 @@ pub const Parser = struct {
                     .InvalidTabIndent
                 else
                     .{
-                        .Object = .{
+                        .ObjectItem = .{
                             .depth = depth,
                             .key = result[0].?,
                             // May be null if the value is on the following line(s).
@@ -382,6 +406,15 @@ pub const Parser = struct {
             if (text[0] != '-') return null;
             if (text.len == 1) return "";
             if (text[1] == ' ') return text[2..];
+            return null;
+        }
+
+        fn parseObjectKey(text: []const u8) ?usize {
+            // Behaves just like string line.
+            assert(text.len > 0);
+            if (text[0] != ':') return null;
+            if (text.len == 1) return 1;
+            if (text[1] == ' ') return 2;
             return null;
         }
 
@@ -428,8 +461,8 @@ pub const Parser = struct {
         const next_line = lines.peekNext().?;
         return switch (next_line.kind) {
             .String => .{ .String = try p.readString(allocator, lines) },
-            .List => .{ .List = try p.readList(allocator, lines) },
-            .Object => .{ .Object = try p.readObject(allocator, lines) },
+            .ListItem => .{ .List = try p.readList(allocator, lines) },
+            .ObjectItem, .ObjectKey => .{ .Object = try p.readObject(allocator, lines) },
             .Unrecognised => {
                 p.maybeStoreDiags(next_line.lineno, "Unrecognised line type");
                 return error.UnrecognisedLine;
@@ -451,7 +484,7 @@ pub const Parser = struct {
         var writer = buffer.writer();
 
         assert(lines.peekNext().?.kind == .String);
-        const depth = lines.peekNext().?.kind.String.depth;
+        const depth = lines.peekNextDepth().?;
 
         while (lines.next()) |line| {
             if (line.kind != .String) {
@@ -481,15 +514,15 @@ pub const Parser = struct {
         var array = Array.init(allocator);
         errdefer array.deinit();
 
-        assert(lines.peekNext().?.kind == .List);
-        const depth = lines.peekNext().?.kind.List.depth;
+        assert(lines.peekNext().?.kind == .ListItem);
+        const depth = lines.peekNextDepth().?;
 
         while (lines.next()) |line| {
-            if (line.kind != .List) {
+            if (line.kind != .ListItem) {
                 p.maybeStoreDiags(line.lineno, "Invalid line type following list item");
                 return error.InvalidItem;
             }
-            const list_line = line.kind.List;
+            const list_line = line.kind.ListItem;
             if (list_line.depth > depth) {
                 p.maybeStoreDiags(line.lineno, "Invalid indentation following list item");
                 return error.InvalidIndentation;
@@ -514,20 +547,27 @@ pub const Parser = struct {
         var map = Map.init(allocator);
         errdefer map.deinit();
 
-        assert(lines.peekNext().?.kind == .Object);
-        const depth = lines.peekNext().?.kind.Object.depth;
+        assert(lines.peekNext().?.kind.isObject());
+        const depth = lines.peekNextDepth().?;
 
-        while (lines.next()) |line| {
-            if (line.kind != .Object) {
+        while (lines.peekNext()) |line| {
+            if (!line.kind.isObject()) {
                 p.maybeStoreDiags(line.lineno, "Invalid line type following object item");
                 return error.InvalidItem;
             }
-            const obj_line = line.kind.Object;
-            if (obj_line.depth > depth) {
+            if (line.getDepth().? > depth) {
                 p.maybeStoreDiags(line.lineno, "Invalid indentation following object item");
                 return error.InvalidIndentation;
             }
-            if (map.contains(obj_line.key)) {
+            const key = switch (line.kind) {
+                .ObjectItem => |obj_line| blk: {
+                    _ = lines.next(); // Advance iterator
+                    break :blk try p.maybeDupString(allocator, obj_line.key);
+                },
+                .ObjectKey => try p.readObjectKey(allocator, lines),
+                else => unreachable,
+            };
+            if (map.contains(key)) {
                 switch (p.options.duplicate_field_behavior) {
                     .UseFirst => continue,
                     .UseLast => {},
@@ -537,20 +577,54 @@ pub const Parser = struct {
                     },
                 }
             }
-
-            var value: Value = undefined;
-            if (obj_line.value) |str| {
-                value = .{ .String = try p.maybeDupString(allocator, str) };
-            } else if (lines.peekNextDepth() != null and lines.peekNextDepth().? > depth) {
-                value = try p.readValue(allocator, lines);
-            } else {
-                value = .{ .String = "" };
-            }
-            try map.put(try p.maybeDupString(allocator, obj_line.key), value);
-
+            const value: Value = blk: {
+                if (line.kind == .ObjectItem and line.kind.ObjectItem.value != null) {
+                    break :blk .{
+                        .String = try p.maybeDupString(allocator, line.kind.ObjectItem.value.?),
+                    };
+                } else if (lines.peekNextDepth() != null and lines.peekNextDepth().? > depth) {
+                    break :blk try p.readValue(allocator, lines);
+                } else {
+                    break :blk .{ .String = "" };
+                }
+            };
+            try map.put(key, value);
             if (lines.peekNextDepth() != null and lines.peekNextDepth().? < depth) break;
         }
         return map;
+    }
+
+    fn readObjectKey(p: Self, allocator: *Allocator, lines: *LinesIter) ![]const u8 {
+        // Handled just like strings.
+        var buffer = ArrayList(u8).init(allocator);
+        errdefer buffer.deinit();
+        var writer = buffer.writer();
+
+        assert(lines.peekNext().?.kind == .ObjectKey);
+        const depth = lines.peekNextDepth().?;
+
+        while (lines.next()) |line| {
+            if (line.kind != .ObjectKey) {
+                p.maybeStoreDiags(
+                    line.lineno,
+                    "Invalid line type following object key line",
+                );
+                return error.InvalidItem;
+            }
+            const is_last_line = lines.peekNextDepth().? != depth;
+            const key_line = line.kind.ObjectKey;
+            if (key_line.depth > depth) {
+                p.maybeStoreDiags(line.lineno, "Invalid indentation of object key line");
+                return error.InvalidIndentation;
+            }
+            // String must be copied as it's not contiguous in-file.
+            if (is_last_line)
+                try writer.writeAll(std.mem.trimRight(u8, key_line.value, &[_]u8{ '\n', '\r' }))
+            else
+                try writer.writeAll(key_line.value);
+            if (is_last_line) break;
+        }
+        return buffer.items;
     }
 
     fn maybeDupString(p: Self, allocator: *Allocator, string: []const u8) ![]const u8 {

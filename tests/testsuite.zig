@@ -16,14 +16,10 @@ const max_file_size: usize = 1024 * 1024;
 
 const skipped_testcases = [_][]const u8{
     "dict_02", // Bug (dumping keys with newlines)
-    "dict_03", // Key quoting - to be removed from spec
     "dict_05", // Root-level leading whitespace (bug...)
-    "dict_17", // Key quoting - to be removed from spec
     "dict_21", // Unrepresentable
     "dict_22", // Unrepresentable
-    "dict_23", // Key quoting - to be removed from spec
     "empty_1", // Bad testcase - empty file maps to null??
-    "holistic_1", // Key quoting - to be removed from spec
     "list_5", // Root-level leading whitespace (bug...)
     "string_multiline_07", // Root-level leading whitespace (bug...)
 };
@@ -60,7 +56,7 @@ fn expectEqualStrings(expected: []const u8, actual: []const u8) !void {
         print("found:\n", .{});
         printIndicatorLine(actual, diff_index);
 
-        return error.ExpectFailure;
+        return error.TestingAssert;
     }
 }
 
