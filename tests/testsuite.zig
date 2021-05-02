@@ -163,7 +163,12 @@ fn testParseError(input_nt: []const u8, expected_error: ParseErrorInfo) !void {
         return error.UnexpectedParseSuccess;
     } else |_| {}
     logger.debug("Got parse error: {s}", .{diags.ParseError.message});
-    testing.expectEqual(expected_error.lineno, diags.ParseError.lineno);
+    const expected = expected_error.lineno;
+    const actual = diags.ParseError.lineno;
+    if (expected != actual) {
+        print("expected {}, found {}", .{ expected, actual });
+        return error.TestingAssert;
+    }
     // TODO: Check message.
 }
 
