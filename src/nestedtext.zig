@@ -48,6 +48,7 @@ pub const ParseError = error{
     InvalidIndentation,
     TabIndentation,
     InvalidItem,
+    MissingObjectValue,
     UnrecognisedLine,
     DuplicateKey,
 };
@@ -579,11 +580,13 @@ pub const Parser = struct {
             }
             const value: Value = blk: {
                 if (line.kind == .ObjectItem and line.kind.ObjectItem.value != null) {
-                    break :blk .{
-                        .String = try p.maybeDupString(allocator, line.kind.ObjectItem.value.?),
-                    };
+                    const string = line.kind.ObjectItem.value.?;
+                    break :blk .{ .String = try p.maybeDupString(allocator, string) };
                 } else if (lines.peekNextDepth() != null and lines.peekNextDepth().? > depth) {
                     break :blk try p.readValue(allocator, lines);
+                } else if (line.kind == .ObjectKey) {
+                    p.maybeStoreDiags(line.lineno, "Multiline object key must be followed by value");
+                    return error.MissingObjectValue;
                 } else {
                     break :blk .{ .String = "" };
                 }
