@@ -373,7 +373,10 @@ pub const Parser = struct {
                     .InvalidTabIndent
                 else
                     .{
-                        .InlineContainer = .{ .depth = depth, .value = stripped },
+                        .InlineContainer = .{
+                            .depth = depth,
+                            .value = std.mem.trimRight(u8, stripped, " \t"),
+                        },
                     };
             } else if (parseObjectKey(tab_stripped)) |index| {
                 // Behaves just like string line.
@@ -667,10 +670,14 @@ pub const Parser = struct {
 
         var text_iter = CharIter{ .text = line_text };
         const value: Value = switch (text_iter.next().?) {
-            '[' => .{ .List = try p.parseInlineList(allocator, &text_iter) },
-            '{' => .{ .Object = try p.parseInlineObject(allocator, &text_iter) },
+            '[' => .{ .List = try p.parseInlineList(allocator, &text_iter, line.lineno) },
+            '{' => .{ .Object = try p.parseInlineObject(allocator, &text_iter, line.lineno) },
             else => unreachable,
         };
+        if (text_iter.idx != text_iter.text.len) {
+            p.maybeStoreDiags(line.lineno, "Unexpected text following closing bracket/brace");
+            return error.InvalidItem;
+        }
 
         // Check next content line is dedented.
         if (lines.peekNextDepth() != null and lines.peekNextDepth().? >= depth) {
@@ -681,43 +688,73 @@ pub const Parser = struct {
         return value;
     }
 
-    fn parseInlineList(p: Self, allocator: *Allocator, text_iter: *CharIter) anyerror!Array {
+    fn parseInlineList(p: Self, allocator: *Allocator, text_iter: *CharIter, lineno: usize) anyerror!Array {
         var array = Array.init(allocator);
         errdefer array.deinit();
 
+        var found_closing_bracket = false;
+        var expecting_value = false;
         var value: ?Value = null;
         // First character is the first one after the opening '['.
         while (text_iter.next()) |char| {
             if (value) |val| {
-                if (!(char == ',' or char == ']')) return error.InvalidItem; // TODO: fill in diags
+                expecting_value = false;
+                if (char == '[' or char == '{') {
+                    p.maybeStoreDiags(
+                        lineno,
+                        "Unexpected opening bracket following inline list value",
+                    );
+                    return error.InvalidItem;
+                }
                 try array.append(val);
                 value = null;
-                if (char == ',') continue;
+                if (char == ',') {
+                    expecting_value = true;
+                    continue;
+                }
             }
             switch (char) {
                 ' ', '\t' => continue,
-                '[' => value = .{ .List = try p.parseInlineList(allocator, text_iter) },
-                '{' => value = .{ .Object = try p.parseInlineObject(allocator, text_iter) },
-                ']' => break, // Caller responsible for checking remainder of line
-                ',' => return error.InvalidItem, // TODO: fill in diags
-                '}' => return error.InvalidItem, // TODO: fill in diags
+                '[' => value = .{ .List = try p.parseInlineList(allocator, text_iter, lineno) },
+                '{' => value = .{ .Object = try p.parseInlineObject(allocator, text_iter, lineno) },
+                ']' => {
+                    if (expecting_value) {
+                        p.maybeStoreDiags(lineno, "Missing value after comma");
+                        return error.InvalidItem;
+                    }
+                    found_closing_bracket = true;
+                    break; // Caller responsible for checking remainder of line
+                },
+                ',' => {
+                    p.maybeStoreDiags(lineno, "Missing value before comma");
+                    return error.InvalidItem;
+                },
+                '}' => {
+                    p.maybeStoreDiags(lineno, "Unexpected closing brace '}'");
+                    return error.InvalidItem;
+                },
                 else => {
                     const start_idx = text_iter.idx - 1;
-                    const end_idx = if (std.mem.indexOfAnyPos(u8, text_iter.text, start_idx, "[]{},")) |idx|
-                        idx
-                    else
-                        return error.InvalidItem; // TODO: fill in diags
+                    const end_idx = blk: {
+                        if (std.mem.indexOfAnyPos(u8, text_iter.text, start_idx, "[]{},")) |idx|
+                            break :blk idx
+                        else break; // Exit loop - no closing bracket
+                    };
                     const string = std.mem.trimRight(u8, text_iter.text[start_idx..end_idx], " \t");
                     value = .{ .String = try p.maybeDupString(allocator, string) };
                     text_iter.idx = end_idx;
                 },
             }
         }
+        if (!found_closing_bracket) {
+            p.maybeStoreDiags(lineno, "Missing closing bracket ']'");
+            return error.InvalidItem;
+        }
 
         return array;
     }
 
-    fn parseInlineObject(p: Self, allocator: *Allocator, text_iter: *CharIter) anyerror!Map {
+    fn parseInlineObject(p: Self, allocator: *Allocator, text_iter: *CharIter, lineno: usize) anyerror!Map {
         var map = Map.init(allocator);
         errdefer map.deinit();
 
