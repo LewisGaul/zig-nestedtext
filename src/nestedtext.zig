@@ -129,9 +129,13 @@ pub const Value = union(enum) {
                     // Single-line string.
                     if (string.len > 0) try out_stream.writeByte(' ');
                     try out_stream.writeAll(string);
-                } else {
+                } else else_blk: {
                     // Multi-line string.
                     if (nested) try out_stream.writeByte('\n');
+                    if (string.len == 0) {
+                        try out_stream.writeByte('>');
+                        break :else_blk;
+                    }
                     var idx: usize = 0;
                     while (readline(string[idx..])) |line| {
                         try out_stream.writeByteNTimes(' ', indent);
@@ -923,7 +927,7 @@ test "stringify: empty" {
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
     try tree.root.stringify(.{}, fbs.outStream());
-    testing.expectEqualStrings("", fbs.getWritten());
+    testing.expectEqualStrings(">", fbs.getWritten());
 }
 
 test "stringify: string" {
