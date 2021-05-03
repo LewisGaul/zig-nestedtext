@@ -709,6 +709,8 @@ pub const Parser = struct {
         var array = Array.init(allocator);
         errdefer array.deinit();
 
+        // TODO: Tidy this up - look at p.parseInlineObject().
+
         var found_closing_bracket = false;
         var expecting_value = false;
         var value: ?Value = null;
@@ -776,7 +778,101 @@ pub const Parser = struct {
         var map = Map.init(allocator);
         errdefer map.deinit();
 
+        // State machine:
+        //  1. Looking for key
+        //  2. Looking for colon
+        //  3. Looking for value
+        //  4. Looking for comma or closing brace
+        const Token = enum {
+            Key,
+            KeyOrEnd,
+            Colon,
+            Value,
+            CommaOrEnd,
+            Finished,
+        };
+
+        var next_token = Token.KeyOrEnd;
+        var parsed_key: ?[]const u8 = null;
+        var parsed_value: ?Value = null;
+        // First character is the first one after the opening '{'.
+        while (text_iter.next()) |char| {
+            // Skip over whitespace between the tokens.
+            if (char == ' ' or char == '\t') continue;
+            // Check the character and/or consume some text for the expected token.
+            switch (next_token) {
+                .Key, .KeyOrEnd => {
+                    if (next_token == .KeyOrEnd and char == '}') {
+                        next_token = .Finished;
+                        break;
+                    }
+                    if (p.parseInlineContainerString(text_iter, "[]{},:")) |key|
+                        parsed_key = key
+                    else {
+                        p.maybeStoreDiags(lineno, "Expected an inline object key");
+                        return error.InvalidItem;
+                    }
+                    next_token = .Colon;
+                },
+                .Colon => {
+                    if (char != ':') {
+                        p.maybeStoreDiags(lineno, "Unexpected character after inline object key");
+                        return error.InvalidItem;
+                    }
+                    next_token = .Value;
+                },
+                .Value => {
+                    if (char == '[')
+                        parsed_value = .{
+                            .List = try p.parseInlineList(allocator, text_iter, lineno),
+                        }
+                    else if (char == '{')
+                        parsed_value = .{
+                            .Object = try p.parseInlineObject(allocator, text_iter, lineno),
+                        }
+                    else if (p.parseInlineContainerString(text_iter, "[]{},:")) |value|
+                        parsed_value = .{ .String = try p.maybeDupString(allocator, value) }
+                    else {
+                        p.maybeStoreDiags(lineno, "Expected an inline object value");
+                        return error.InvalidItem;
+                    }
+                    next_token = .CommaOrEnd;
+                },
+                .CommaOrEnd => {
+                    if (char != ',' and char != '}') {
+                        p.maybeStoreDiags(lineno, "Unexpected character after inline object value");
+                        return error.InvalidItem;
+                    }
+                    try map.put(parsed_key.?, parsed_value.?);
+                    parsed_key = null;
+                    parsed_value = null;
+                    if (char == '}') {
+                        next_token = .Finished;
+                        break;
+                    }
+                    next_token = .Key;
+                },
+                .Finished => unreachable,
+            }
+        }
+        if (next_token != .Finished) {
+            p.maybeStoreDiags(lineno, "Missing closing brace '}'");
+            return error.InvalidItem;
+        }
         return map;
+    }
+
+    fn parseInlineContainerString(p: Self, text_iter: *CharIter, disallowed_chars: []const u8) ?[]const u8 {
+        const start_idx = text_iter.idx - 1;
+        const end_idx = blk: {
+            if (std.mem.indexOfAnyPos(u8, text_iter.text, start_idx, disallowed_chars)) |idx|
+                break :blk idx
+            else
+                break :blk text_iter.text.len;
+        };
+        if (end_idx == start_idx) return null; // Zero-length (empty string)
+        text_iter.idx = end_idx;
+        return std.mem.trim(u8, text_iter.text[start_idx..end_idx], " \t");
     }
 
     fn maybeDupString(p: Self, allocator: *Allocator, string: []const u8) ![]const u8 {
