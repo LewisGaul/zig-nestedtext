@@ -57,8 +57,8 @@ fn parseArgs() !Args {
         clap.parseParam("-h, --help              Display this help and exit") catch unreachable,
         clap.parseParam("-f, --infile <PATH>     Input file (defaults to stdin)") catch unreachable,
         clap.parseParam("-o, --outfile <PATH>    Output file (defaults to stdout)") catch unreachable,
-        clap.parseParam("-F, --informat <PATH>   Input format (defaults to 'nt')") catch unreachable,
-        clap.parseParam("-O, --outformat <PATH>  Output format (defaults to 'json')") catch unreachable,
+        clap.parseParam("-F, --infmt <FMT>   Input format (defaults to 'nt')") catch unreachable,
+        clap.parseParam("-O, --outfmt <FMT>  Output format (defaults to 'json')") catch unreachable,
     };
 
     // Initalize diagnostics for reporting parsing errors.
@@ -79,7 +79,7 @@ fn parseArgs() !Args {
 
     var args = Args{ .input_file = undefined, .output_file = undefined };
 
-    if (clap_args.option("--informat")) |fmt| {
+    if (clap_args.option("--infmt")) |fmt| {
         args.input_format = parseFormat(fmt) catch |err| {
             try stderr.print(
                 "Unrecognised input format '{s}', should be one of 'json' or 'nt'\n",
@@ -89,7 +89,7 @@ fn parseArgs() !Args {
         };
     }
 
-    if (clap_args.option("--outformat")) |fmt| {
+    if (clap_args.option("--outfmt")) |fmt| {
         args.output_format = parseFormat(fmt) catch |err| {
             try stderr.print(
                 "Unrecognised output format '{s}', should be one of 'json' or 'nt'\n",
