@@ -79,7 +79,7 @@ pub const Value = union(enum) {
         options: StringifyOptions,
         out_stream: anytype,
     ) @TypeOf(out_stream).Error!void {
-        try value.stringifyInternal(options, out_stream, 0, false);
+        try value.stringifyInternal(options, out_stream, 0, false, false);
     }
 
     pub fn toJson(value: @This(), allocator: *Allocator) !json.ValueTree {
@@ -118,12 +118,16 @@ pub const Value = union(enum) {
         out_stream: anytype,
         indent: usize,
         nested: bool,
+        force_multiline_string: bool,
     ) @TypeOf(out_stream).Error!void {
         switch (value) {
             .String => |string| {
-                if (std.mem.indexOfAny(u8, string, "\r\n") == null) {
+                if (nested and
+                    std.mem.indexOfAny(u8, string, "\r\n") == null and
+                    !force_multiline_string)
+                {
                     // Single-line string.
-                    if (nested and string.len > 0) try out_stream.writeByte(' ');
+                    if (string.len > 0) try out_stream.writeByte(' ');
                     try out_stream.writeAll(string);
                 } else {
                     // Multi-line string.
@@ -154,22 +158,53 @@ pub const Value = union(enum) {
                         out_stream,
                         indent + options.indent,
                         true,
+                        false,
                     );
                 }
             },
             .Object => |object| {
+                var force_multiline_string_next = false;
                 if (nested) try out_stream.writeByte('\n');
                 var iter = object.iterator();
                 var first_elem = true;
                 while (iter.next()) |elem| {
                     if (!first_elem) try out_stream.writeByte('\n');
                     try out_stream.writeByteNTimes(' ', indent);
-                    try out_stream.print("{s}:", .{elem.key});
+                    const key = elem.key;
+                    if (key.len > 0 and
+                        std.mem.indexOfAny(u8, key, ":\r\n") == null and
+                        std.mem.indexOfAny(u8, key[0..1], ">- \t") == null and
+                        std.mem.indexOfAny(u8, key[key.len - 1 ..], " \t") == null)
+                    {
+                        // Simple key.
+                        try out_stream.print("{s}:", .{key});
+                    } else else_blk: {
+                        // Multi-line key.
+                        force_multiline_string_next = true;
+                        if (key.len == 0) {
+                            try out_stream.writeByte(':');
+                            break :else_blk;
+                        }
+                        var idx: usize = 0;
+                        while (readline(key[idx..])) |line| {
+                            try out_stream.writeByteNTimes(' ', indent);
+                            try out_stream.writeByte(':');
+                            if (line.len > 0)
+                                try out_stream.print(" {s}", .{line});
+                            idx += line.len;
+                        }
+                        const last_char = key[key.len - 1];
+                        if (last_char == '\n' or last_char == '\r') {
+                            try out_stream.writeByteNTimes(' ', indent);
+                            try out_stream.writeByte(':');
+                        }
+                    }
                     try elem.value.stringifyInternal(
                         options,
                         out_stream,
                         indent + options.indent,
                         true,
+                        force_multiline_string_next,
                     );
                     first_elem = false;
                 }
@@ -738,7 +773,8 @@ pub const Parser = struct {
                     const end_idx = blk: {
                         if (std.mem.indexOfAnyPos(u8, text_iter.text, start_idx, "[]{},")) |idx|
                             break :blk idx
-                        else break; // Exit loop - no closing bracket
+                        else
+                            break; // Exit loop - no closing bracket
                     };
                     const string = std.mem.trimRight(u8, text_iter.text[start_idx..end_idx], " \t");
                     value = .{ .String = try p.maybeDupString(allocator, string) };
