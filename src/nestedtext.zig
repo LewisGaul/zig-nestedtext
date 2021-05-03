@@ -260,9 +260,9 @@ pub const Parser = struct {
     const LineType = union(enum) {
         Blank,
         Comment,
-        String: struct { depth: usize, value: []const u8 },
-        List: struct { depth: usize, value: ?[]const u8 },
-        Object: struct { depth: usize, key: []const u8, value: ?[]const u8 },
+        String: struct { value: []const u8 },
+        List: struct { value: ?[]const u8 },
+        Object: struct { key: []const u8, value: ?[]const u8 },
         Unrecognised,
         InvalidTabIndent,
     };
@@ -270,6 +270,7 @@ pub const Parser = struct {
     const Line = struct {
         text: []const u8,
         lineno: usize,
+        depth: usize,
         kind: LineType,
     };
 
@@ -292,16 +293,6 @@ pub const Parser = struct {
 
         pub fn peekNext(self: LinesIter) ?Line {
             return self.next_line;
-        }
-
-        pub fn peekNextDepth(self: LinesIter) ?usize {
-            if (self.peekNext() == null) return null;
-            return switch (self.peekNext().?.kind) {
-                .String => |k| k.depth,
-                .List => |k| k.depth,
-                .Object => |k| k.depth,
-                else => null,
-            };
         }
 
         fn advanceToNextContentLine(self: *LinesIter) void {
@@ -337,7 +328,6 @@ pub const Parser = struct {
                 else
                     .{
                         .String = .{
-                            .depth = depth,
                             .value = full_line[text.len - stripped.len + index ..],
                         },
                     };
@@ -347,7 +337,6 @@ pub const Parser = struct {
                 else
                     .{
                         .List = .{
-                            .depth = depth,
                             .value = if (value.len > 0) value else null,
                         },
                     };
@@ -357,7 +346,6 @@ pub const Parser = struct {
                 else
                     .{
                         .Object = .{
-                            .depth = depth,
                             .key = result[0].?,
                             // May be null if the value is on the following line(s).
                             .value = result[1],
@@ -366,7 +354,7 @@ pub const Parser = struct {
             } else {
                 kind = .Unrecognised;
             }
-            return .{ .text = text, .lineno = lineno, .kind = kind };
+            return .{ .text = text, .lineno = lineno, .depth = depth, .kind = kind };
         }
 
         fn parseString(text: []const u8) ?usize {
@@ -451,7 +439,7 @@ pub const Parser = struct {
         var writer = buffer.writer();
 
         assert(lines.peekNext().?.kind == .String);
-        const depth = lines.peekNext().?.kind.String.depth;
+        const depth = lines.peekNext().?.depth;
 
         while (lines.next()) |line| {
             if (line.kind != .String) {
@@ -461,9 +449,9 @@ pub const Parser = struct {
                 );
                 return error.InvalidItem;
             }
-            const is_last_line = lines.peekNextDepth() == null or lines.peekNextDepth().? < depth;
+            const is_last_line = lines.peekNext() == null or lines.peekNext().?.depth < depth;
             const str_line = line.kind.String;
-            if (str_line.depth > depth) {
+            if (line.depth > depth) {
                 p.maybeStoreDiags(line.lineno, "Invalid indentation of multi-line string");
                 return error.InvalidIndentation;
             }
@@ -482,7 +470,7 @@ pub const Parser = struct {
         errdefer array.deinit();
 
         assert(lines.peekNext().?.kind == .List);
-        const depth = lines.peekNext().?.kind.List.depth;
+        const depth = lines.peekNext().?.depth;
 
         while (lines.next()) |line| {
             if (line.kind != .List) {
@@ -490,7 +478,7 @@ pub const Parser = struct {
                 return error.InvalidItem;
             }
             const list_line = line.kind.List;
-            if (list_line.depth > depth) {
+            if (line.depth > depth) {
                 p.maybeStoreDiags(line.lineno, "Invalid indentation following list item");
                 return error.InvalidIndentation;
             }
@@ -498,14 +486,14 @@ pub const Parser = struct {
             var value: Value = undefined;
             if (list_line.value) |str| {
                 value = .{ .String = try p.maybeDupString(allocator, str) };
-            } else if (lines.peekNextDepth() != null and lines.peekNextDepth().? > depth) {
+            } else if (lines.peekNext() != null and lines.peekNext().?.depth > depth) {
                 value = try p.readValue(allocator, lines);
             } else {
                 value = .{ .String = "" };
             }
             try array.append(value);
 
-            if (lines.peekNextDepth() != null and lines.peekNextDepth().? < depth) break;
+            if (lines.peekNext() != null and lines.peekNext().?.depth < depth) break;
         }
         return array;
     }
@@ -515,7 +503,7 @@ pub const Parser = struct {
         errdefer map.deinit();
 
         assert(lines.peekNext().?.kind == .Object);
-        const depth = lines.peekNext().?.kind.Object.depth;
+        const depth = lines.peekNext().?.depth;
 
         while (lines.next()) |line| {
             if (line.kind != .Object) {
@@ -523,7 +511,7 @@ pub const Parser = struct {
                 return error.InvalidItem;
             }
             const obj_line = line.kind.Object;
-            if (obj_line.depth > depth) {
+            if (line.depth > depth) {
                 p.maybeStoreDiags(line.lineno, "Invalid indentation following object item");
                 return error.InvalidIndentation;
             }
@@ -541,14 +529,14 @@ pub const Parser = struct {
             var value: Value = undefined;
             if (obj_line.value) |str| {
                 value = .{ .String = try p.maybeDupString(allocator, str) };
-            } else if (lines.peekNextDepth() != null and lines.peekNextDepth().? > depth) {
+            } else if (lines.peekNext() != null and lines.peekNext().?.depth > depth) {
                 value = try p.readValue(allocator, lines);
             } else {
                 value = .{ .String = "" };
             }
             try map.put(try p.maybeDupString(allocator, obj_line.key), value);
 
-            if (lines.peekNextDepth() != null and lines.peekNextDepth().? < depth) break;
+            if (lines.peekNext() != null and lines.peekNext().?.depth < depth) break;
         }
         return map;
     }
