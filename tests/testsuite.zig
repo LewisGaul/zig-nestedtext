@@ -22,6 +22,9 @@ const skipped_testcases = [_][]const u8{
     "empty_1", // Bad testcase - empty file maps to null??
     "list_5", // Root-level leading whitespace (bug...)
     "string_multiline_07", // Root-level leading whitespace (bug...)
+    // TODO: Testcase for different line endings in same file (error lineno)
+    // TODO: Testcase for multiline key without following value (error lineno)
+    // TODO: Testcase for bad object keys ('-', '>', ':', '[', '{')
 };
 
 const fail_fast = false;
