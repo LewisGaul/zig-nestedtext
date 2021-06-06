@@ -204,11 +204,8 @@ fn fromJsonInternal(allocator: *Allocator, json_value: json.Value) anyerror!Valu
                 .Float => |inner| {
                     try buffer.writer().print("{e}", .{inner});
                 },
-                .String => |inner| {
+                .String, .NumberString => |inner| {
                     try buffer.writer().print("{s}", .{inner});
-                },
-                .NumberString => |inner| {
-                    try buffer.writer().print("{e}", .{std.fmt.fmtSliceEscapeLower(inner)});
                 },
                 else => unreachable,
             }
