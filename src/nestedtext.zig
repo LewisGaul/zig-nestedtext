@@ -569,7 +569,7 @@ test "parse empty" {
     var tree = try p.parse("");
     defer tree.deinit();
 
-    testing.expectEqual(Value{ .String = "" }, tree.root);
+    try testing.expectEqual(Value{ .String = "" }, tree.root);
 }
 
 test "basic parse: string" {
@@ -584,7 +584,7 @@ test "basic parse: string" {
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    testing.expectEqualStrings("this is a\nmultiline\nstring", tree.root.String);
+    try testing.expectEqualStrings("this is a\nmultiline\nstring", tree.root.String);
 }
 
 test "basic parse: list" {
@@ -600,8 +600,8 @@ test "basic parse: list" {
 
     const array: Array = tree.root.List;
 
-    testing.expectEqualStrings("foo", array.items[0].String);
-    testing.expectEqualStrings("bar", array.items[1].String);
+    try testing.expectEqualStrings("foo", array.items[0].String);
+    try testing.expectEqualStrings("bar", array.items[1].String);
 }
 
 test "basic parse: object" {
@@ -617,8 +617,8 @@ test "basic parse: object" {
 
     const map: Map = tree.root.Object;
 
-    testing.expectEqualStrings("1", map.get("foo").?.String);
-    testing.expectEqualStrings("False", map.get("bar").?.String);
+    try testing.expectEqualStrings("1", map.get("foo").?.String);
+    try testing.expectEqualStrings("False", map.get("bar").?.String);
 }
 
 test "nested parse: object inside object" {
@@ -637,10 +637,10 @@ test "nested parse: object inside object" {
 
     const map: Map = tree.root.Object;
 
-    testing.expectEqualStrings("1", map.get("foo").?.String);
-    testing.expectEqualStrings("", map.get("baz").?.String);
-    testing.expectEqualStrings("2", map.get("bar").?.Object.get("nest1").?.String);
-    testing.expectEqualStrings("3", map.get("bar").?.Object.get("nest2").?.String);
+    try testing.expectEqualStrings("1", map.get("foo").?.String);
+    try testing.expectEqualStrings("", map.get("baz").?.String);
+    try testing.expectEqualStrings("2", map.get("bar").?.Object.get("nest1").?.String);
+    try testing.expectEqualStrings("3", map.get("bar").?.Object.get("nest2").?.String);
 }
 
 test "failed parse: multi-line string indent" {
@@ -653,9 +653,9 @@ test "failed parse: multi-line string indent" {
         \\   > bar
     ;
 
-    testing.expectError(error.InvalidIndentation, p.parse(s));
-    testing.expectEqual(@as(usize, 2), diags.ParseError.lineno);
-    testing.expectEqualStrings(
+    try testing.expectError(error.InvalidIndentation, p.parse(s));
+    try testing.expectEqual(@as(usize, 2), diags.ParseError.lineno);
+    try testing.expectEqualStrings(
         "Invalid indentation of multi-line string",
         diags.ParseError.message,
     );
@@ -669,8 +669,8 @@ test "stringify: empty" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try tree.root.stringify(.{}, fbs.outStream());
-    testing.expectEqualStrings("", fbs.getWritten());
+    try tree.root.stringify(.{}, fbs.writer());
+    try testing.expectEqualStrings("", fbs.getWritten());
 }
 
 test "stringify: string" {
@@ -687,8 +687,8 @@ test "stringify: string" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try tree.root.stringify(.{}, fbs.outStream());
-    testing.expectEqualStrings(s, fbs.getWritten());
+    try tree.root.stringify(.{}, fbs.writer());
+    try testing.expectEqualStrings(s, fbs.getWritten());
 }
 
 test "stringify: list" {
@@ -704,8 +704,8 @@ test "stringify: list" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try tree.root.stringify(.{}, fbs.outStream());
-    testing.expectEqualStrings(s, fbs.getWritten());
+    try tree.root.stringify(.{}, fbs.writer());
+    try testing.expectEqualStrings(s, fbs.getWritten());
 }
 
 test "stringify: object" {
@@ -721,8 +721,8 @@ test "stringify: object" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try tree.root.stringify(.{}, fbs.outStream());
-    testing.expectEqualStrings(s, fbs.getWritten());
+    try tree.root.stringify(.{}, fbs.writer());
+    try testing.expectEqualStrings(s, fbs.getWritten());
 }
 
 test "stringify: multiline string inside object" {
@@ -740,8 +740,8 @@ test "stringify: multiline string inside object" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try tree.root.stringify(.{}, fbs.outStream());
-    testing.expectEqualStrings(s, fbs.getWritten());
+    try tree.root.stringify(.{}, fbs.writer());
+    try testing.expectEqualStrings(s, fbs.getWritten());
 }
 
 test "convert to JSON: empty" {
@@ -755,8 +755,8 @@ test "convert to JSON: empty" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try json_tree.root.jsonStringify(.{}, fbs.outStream());
-    testing.expectEqualStrings("\"\"", fbs.getWritten());
+    try json_tree.root.jsonStringify(.{}, fbs.writer());
+    try testing.expectEqualStrings("\"\"", fbs.getWritten());
 }
 
 test "convert to JSON: string" {
@@ -776,8 +776,8 @@ test "convert to JSON: string" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try json_tree.root.jsonStringify(.{}, fbs.outStream());
-    testing.expectEqualStrings("\"this is a\\nmultiline\\nstring\"", fbs.getWritten());
+    try json_tree.root.jsonStringify(.{}, fbs.writer());
+    try testing.expectEqualStrings("\"this is a\\nmultiline\\nstring\"", fbs.getWritten());
 }
 
 test "convert to JSON: list" {
@@ -796,11 +796,11 @@ test "convert to JSON: list" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try json_tree.root.jsonStringify(.{}, fbs.outStream());
+    try json_tree.root.jsonStringify(.{}, fbs.writer());
     const expected_json =
         \\["foo","bar"]
     ;
-    testing.expectEqualStrings(expected_json, fbs.getWritten());
+    try testing.expectEqualStrings(expected_json, fbs.getWritten());
 }
 
 test "convert to JSON: object" {
@@ -819,12 +819,12 @@ test "convert to JSON: object" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try json_tree.root.jsonStringify(.{}, fbs.outStream());
+    try json_tree.root.jsonStringify(.{}, fbs.writer());
     // TODO: Order of objects not yet guaranteed.
     const expected_json =
         \\{"foo":"1","bar":"False"}
     ;
-    testing.expectEqualStrings(expected_json, fbs.getWritten());
+    try testing.expectEqualStrings(expected_json, fbs.getWritten());
 }
 
 test "convert to JSON: object inside object" {
@@ -844,11 +844,11 @@ test "convert to JSON: object inside object" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try json_tree.root.jsonStringify(.{}, fbs.outStream());
+    try json_tree.root.jsonStringify(.{}, fbs.writer());
     const expected_json =
         \\{"bar":{"nest1":"1","nest2":"2"}}
     ;
-    testing.expectEqualStrings(expected_json, fbs.getWritten());
+    try testing.expectEqualStrings(expected_json, fbs.getWritten());
 }
 
 test "convert to JSON: list inside object" {
@@ -868,11 +868,11 @@ test "convert to JSON: list inside object" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try json_tree.root.jsonStringify(.{}, fbs.outStream());
+    try json_tree.root.jsonStringify(.{}, fbs.writer());
     const expected_json =
         \\{"bar":["nest1","nest2"]}
     ;
-    testing.expectEqualStrings(expected_json, fbs.getWritten());
+    try testing.expectEqualStrings(expected_json, fbs.getWritten());
 }
 
 test "convert to JSON: multiline string inside object" {
@@ -892,11 +892,11 @@ test "convert to JSON: multiline string inside object" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try json_tree.root.jsonStringify(.{}, fbs.outStream());
+    try json_tree.root.jsonStringify(.{}, fbs.writer());
     const expected_json =
         \\{"foo":"multi\nline"}
     ;
-    testing.expectEqualStrings(expected_json, fbs.getWritten());
+    try testing.expectEqualStrings(expected_json, fbs.getWritten());
 }
 
 test "convert to JSON: multiline string inside list" {
@@ -917,9 +917,9 @@ test "convert to JSON: multiline string inside list" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try json_tree.root.jsonStringify(.{}, fbs.outStream());
+    try json_tree.root.jsonStringify(.{}, fbs.writer());
     const expected_json =
         \\["multi\nline",""]
     ;
-    testing.expectEqualStrings(expected_json, fbs.getWritten());
+    try testing.expectEqualStrings(expected_json, fbs.getWritten());
 }
