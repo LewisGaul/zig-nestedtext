@@ -174,6 +174,7 @@ pub const Value = union(enum) {
             .List => |list| {
                 if (nested) try out_stream.writeByte('\n');
                 if (list.items.len == 0) {
+                    try out_stream.writeByteNTimes(' ', indent);
                     try out_stream.writeAll("[]");
                     return;
                 }
@@ -193,6 +194,7 @@ pub const Value = union(enum) {
             .Object => |object| {
                 if (nested) try out_stream.writeByte('\n');
                 if (object.count() == 0) {
+                    try out_stream.writeByteNTimes(' ', indent);
                     try out_stream.writeAll("{}");
                     return;
                 }
@@ -749,65 +751,66 @@ pub const Parser = struct {
         var array = Array.init(allocator);
         errdefer array.deinit();
 
-        // TODO: Tidy this up - look at p.parseInlineObject().
+        // State machine:
+        //  1. Looking for value (or closing brace -> finished)
+        //  2. Looking for comma (or closing brace -> finished)
+        //  3. Looking for value
+        //  4. Looking for comma (or closing brace -> finished)
+        //  ...
+        const Token = enum {
+            Value,
+            ValueOrEnd,
+            CommaOrEnd,
+            Finished,
+        };
 
-        var found_closing_bracket = false;
-        var expecting_value = false;
-        var value: ?Value = null;
+        var next_token = Token.ValueOrEnd;
+        var parsed_value: ?Value = null;
         // First character is the first one after the opening '['.
         while (text_iter.next()) |char| {
-            if (value) |val| {
-                expecting_value = false;
-                if (char == '[' or char == '{') {
-                    p.maybeStoreDiags(
-                        lineno,
-                        "Unexpected opening bracket following inline list value",
-                    );
-                    return error.InvalidItem;
-                }
-                try array.append(val);
-                value = null;
-                if (char == ',') {
-                    expecting_value = true;
-                    continue;
-                }
-            }
-            switch (char) {
-                ' ', '\t' => continue,
-                '[' => value = .{ .List = try p.parseInlineList(allocator, text_iter, lineno) },
-                '{' => value = .{ .Object = try p.parseInlineObject(allocator, text_iter, lineno) },
-                ']' => {
-                    if (expecting_value) {
-                        p.maybeStoreDiags(lineno, "Missing value after comma");
+            // Skip over whitespace between the tokens.
+            if (char == ' ' or char == '\t') continue;
+            // Check the character and/or consume some text for the expected token.
+            switch (next_token) {
+                .Value, .ValueOrEnd => {
+                    if (next_token == .ValueOrEnd and char == ']') {
+                        next_token = .Finished;
+                        break;
+                    }
+                    if (char == '[')
+                        parsed_value = .{
+                            .List = try p.parseInlineList(allocator, text_iter, lineno),
+                        }
+                    else if (char == '{')
+                        parsed_value = .{
+                            .Object = try p.parseInlineObject(allocator, text_iter, lineno),
+                        }
+                    else if (p.parseInlineContainerString(text_iter, "[]{},")) |value|
+                        parsed_value = .{ .String = try p.maybeDupString(allocator, value) }
+                    else {
+                        p.maybeStoreDiags(lineno, "Expected an inline list value");
                         return error.InvalidItem;
                     }
-                    found_closing_bracket = true;
-                    break; // Caller responsible for checking remainder of line
+                    next_token = .CommaOrEnd;
                 },
-                ',' => {
-                    p.maybeStoreDiags(lineno, "Missing value before comma");
-                    return error.InvalidItem;
+                .CommaOrEnd => {
+                    if (char != ',' and char != ']') {
+                        p.maybeStoreDiags(lineno, "Unexpected character after inline list value");
+                        return error.InvalidItem;
+                    }
+                    try array.append(parsed_value.?);
+                    parsed_value = null;
+                    if (char == ']') {
+                        next_token = .Finished;
+                        break;
+                    }
+                    next_token = .Value;
                 },
-                '}' => {
-                    p.maybeStoreDiags(lineno, "Unexpected closing brace '}'");
-                    return error.InvalidItem;
-                },
-                else => {
-                    const start_idx = text_iter.idx - 1;
-                    const end_idx = blk: {
-                        if (std.mem.indexOfAnyPos(u8, text_iter.text, start_idx, "[]{},")) |idx|
-                            break :blk idx
-                        else
-                            break; // Exit loop - no closing bracket
-                    };
-                    const string = std.mem.trimRight(u8, text_iter.text[start_idx..end_idx], " \t");
-                    value = .{ .String = try p.maybeDupString(allocator, string) };
-                    text_iter.idx = end_idx;
-                },
+                .Finished => unreachable,
             }
         }
-        if (!found_closing_bracket) {
-            p.maybeStoreDiags(lineno, "Missing closing bracket ']'");
+        if (next_token != .Finished) {
+            p.maybeStoreDiags(lineno, "Missing closing brace ']'");
             return error.InvalidItem;
         }
 

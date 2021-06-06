@@ -17,8 +17,6 @@ const max_file_size: usize = 1024 * 1024;
 const skipped_testcases = [_][]const u8{
     "dict_21", // Unrepresentable
     "dict_22", // Unrepresentable
-    "inline_dict_01", // Empty key (bug/spec to change?)
-    "inline_list_01", // Trailing comma (bug/spec to change?)
     // TODO: Testcase for different line endings in same file (error lineno)
     // TODO: Testcase for multiline key without following value (error lineno)
     // TODO: Testcase for bad object keys ('-', '>', ':', '[', '{')
