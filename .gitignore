@@ -1,4 +1,5 @@
 zig-cache/
+zig-out/
 *.code-workspace
 .idea/
 deps.zig

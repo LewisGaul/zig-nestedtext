@@ -88,15 +88,15 @@ fn printWithVisibleNewlines(source: []const u8) void {
     while (std.mem.indexOf(u8, source[i..], "\n")) |nl| : (i += nl + 1) {
         printLine(source[i .. i + nl]);
     }
-    print("{}<ETX>\n", .{source[i..]}); // End of Text (ETX)
+    print("{s}<ETX>\n", .{source[i..]}); // End of Text (ETX)
 }
 
 fn printLine(line: []const u8) void {
     if (line.len != 0) switch (line[line.len - 1]) {
-        ' ', '\t' => print("{}<CR>\n", .{line}), // Carriage return
+        ' ', '\t' => print("{s}<CR>\n", .{line}), // Carriage return
         else => {},
     };
-    print("{}\n", .{line});
+    print("{s}\n", .{line});
 }
 
 // Helpers
@@ -271,7 +271,7 @@ fn testAll(base_dir: std.fs.Dir) !void {
         for (failures.items) |name|
             print(" {s}\n", .{name});
         print("\n", .{});
-        testing.expect(false);
+        return error.TestFailure;
     }
 }
 

@@ -62,8 +62,8 @@ fn parseArgs() !Args {
     };
 
     // Initalize diagnostics for reporting parsing errors.
-    var diag: clap.Diagnostic = undefined;
-    var clap_args = clap.parse(clap.Help, &params, allocator, &diag) catch |err| {
+    var diag = clap.Diagnostic{};
+    var clap_args = clap.parse(clap.Help, &params, .{ .diagnostic = &diag }) catch |err| {
         diag.report(stderr, err) catch {};
         return err;
     };
