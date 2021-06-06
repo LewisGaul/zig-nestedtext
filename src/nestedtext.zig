@@ -779,10 +779,13 @@ pub const Parser = struct {
         errdefer map.deinit();
 
         // State machine:
-        //  1. Looking for key
+        //  1. Looking for key (or closing brace -> finished)
         //  2. Looking for colon
         //  3. Looking for value
-        //  4. Looking for comma or closing brace
+        //  4. Looking for comma (or closing brace -> finished)
+        //  5. Looking for key
+        //  6. Looking for colon
+        //  ...
         const Token = enum {
             Key,
             KeyOrEnd,
