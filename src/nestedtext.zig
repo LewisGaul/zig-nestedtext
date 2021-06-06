@@ -202,9 +202,16 @@ pub const Value = union(enum) {
                     if (!first_elem) try out_stream.writeByte('\n');
                     const key = elem.key_ptr.*;
                     if (key.len > 0 and
-                        std.mem.indexOfAny(u8, key, ":\r\n") == null and
-                        std.mem.indexOfAny(u8, key[0..1], "#>- \t") == null and
-                        std.mem.indexOfAny(u8, key[key.len - 1 ..], " \t") == null)
+                        // No newlines
+                        std.mem.indexOfAny(u8, key, "\r\n") == null and
+                        // No leading whitespace or other special characters
+                        std.mem.indexOfAny(u8, key[0..1], "#[{ \t") == null and
+                        // No trailing whitespace
+                        std.mem.indexOfAny(u8, key[key.len - 1 ..], " \t") == null and
+                        // No leading special characters followed by a space
+                        !(std.mem.indexOfAny(u8, key[0..1], ">-") != null and (key.len == 1 or key[1] == ' ')) and
+                        // No internal colons followed by a space
+                        std.mem.indexOf(u8, key, ": ") == null)
                     {
                         // Simple key.
                         try out_stream.writeByteNTimes(' ', indent);
@@ -477,7 +484,6 @@ pub const Parser = struct {
         }
 
         fn parseObject(text: []const u8) ?[2]?[]const u8 {
-            // TODO: Disallow leading ':', '-', '>', '[', '{'
             for (text) |char, i| {
                 if (char == ':') {
                     if (text.len > i + 1 and text[i + 1] != ' ') continue;

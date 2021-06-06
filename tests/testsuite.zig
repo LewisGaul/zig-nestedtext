@@ -16,11 +16,8 @@ const max_file_size: usize = 1024 * 1024;
 
 const skipped_testcases = [_][]const u8{
     "dict_05", // Root-level leading whitespace (bug...)
-    "dict_16", // Dumping keys with colons
-    "dict_20", // Dumping keys with colons
     "dict_21", // Unrepresentable
     "dict_22", // Unrepresentable
-    "dict_26", // Dumping keys with colons
     "inline_dict_01", // Empty key (bug/spec to change?)
     "inline_list_01", // Trailing comma (bug/spec to change?)
     "list_5", // Root-level leading whitespace (bug...)
