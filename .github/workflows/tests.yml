@@ -20,7 +20,7 @@ jobs:
       - name: Zig setup
         uses: goto-bus-stop/setup-zig@v1
         with:
-          version: 0.7.1
+          version: 0.8.0
 
       - name: Run all tests
         run: zig build test
@@ -33,7 +33,7 @@ jobs:
       - name: Setup Zig
         uses: goto-bus-stop/setup-zig@v1
         with:
-          version: 0.7.1
+          version: 0.8.0
 
       - name: Check formatting
         run: zig fmt --check .
