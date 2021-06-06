@@ -42,6 +42,7 @@ fn readline(input: []const u8) ?[]const u8 {
 // -----------------------------------------------------------------------------
 
 pub const ParseError = error{
+    RootLevelIndent,
     InvalidIndentation,
     TabIndentation,
     InvalidItem,
@@ -529,10 +530,17 @@ pub const Parser = struct {
 
         var lines = LinesIter.init(input);
 
-        tree.root = if (lines.peekNext() != null)
-            try p.readValue(&tree.arena.allocator, &lines) // Recursively parse
-        else
-            null;
+        tree.root = if (lines.peekNext()) |first_line| blk: {
+            if (first_line.depth > 0) {
+                p.maybeStoreDiags(
+                    first_line.lineno,
+                    "Unexpected indentation on first content line",
+                );
+                return ParseError.RootLevelIndent;
+            }
+            // Recursively parse
+            break :blk try p.readValue(&tree.arena.allocator, &lines);
+        } else null;
 
         return tree;
     }
@@ -942,9 +950,9 @@ test "basic parse: string" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ > this is a
-        \\ > multiline
-        \\ > string
+        \\> this is a
+        \\> multiline
+        \\> string
     ;
 
     var tree = try p.parse(s);
@@ -957,8 +965,8 @@ test "basic parse: list" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ - foo
-        \\ - bar
+        \\- foo
+        \\- bar
     ;
 
     var tree = try p.parse(s);
@@ -974,8 +982,8 @@ test "basic parse: object" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ foo: 1
-        \\ bar: False
+        \\foo: 1
+        \\bar: False
     ;
 
     var tree = try p.parse(s);
@@ -991,11 +999,11 @@ test "nested parse: object inside object" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ foo: 1
-        \\ bar:
-        \\   nest1: 2
-        \\   nest2: 3
-        \\ baz:
+        \\foo: 1
+        \\bar:
+        \\  nest1: 2
+        \\  nest2: 3
+        \\baz:
     ;
 
     var tree = try p.parse(s);
@@ -1015,8 +1023,8 @@ test "failed parse: multi-line string indent" {
     p.diags = &diags;
 
     const s =
-        \\ > foo
-        \\   > bar
+        \\> foo
+        \\  > bar
     ;
 
     try testing.expectError(error.InvalidIndentation, p.parse(s));
@@ -1102,9 +1110,9 @@ test "convert to JSON: string" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ > this is a
-        \\ > multiline
-        \\ > string
+        \\> this is a
+        \\> multiline
+        \\> string
     ;
 
     var tree = try p.parse(s);
@@ -1123,8 +1131,8 @@ test "convert to JSON: list" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ - foo
-        \\ - bar
+        \\- foo
+        \\- bar
     ;
 
     var tree = try p.parse(s);
@@ -1146,8 +1154,8 @@ test "convert to JSON: object" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ foo: 1
-        \\ bar: False
+        \\foo: 1
+        \\bar: False
     ;
 
     var tree = try p.parse(s);
@@ -1170,9 +1178,9 @@ test "convert to JSON: object inside object" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ bar:
-        \\   nest1: 1
-        \\   nest2: 2
+        \\bar:
+        \\  nest1: 1
+        \\  nest2: 2
     ;
 
     var tree = try p.parse(s);
@@ -1194,9 +1202,9 @@ test "convert to JSON: list inside object" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ bar:
-        \\   - nest1
-        \\   - nest2
+        \\bar:
+        \\  - nest1
+        \\  - nest2
     ;
 
     var tree = try p.parse(s);
@@ -1218,9 +1226,9 @@ test "convert to JSON: multiline string inside object" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ foo:
-        \\   > multi
-        \\   > line
+        \\foo:
+        \\  > multi
+        \\  > line
     ;
 
     var tree = try p.parse(s);
@@ -1242,10 +1250,10 @@ test "convert to JSON: multiline string inside list" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ -
-        \\   > multi
-        \\   > line
-        \\ -
+        \\-
+        \\  > multi
+        \\  > line
+        \\-
     ;
 
     var tree = try p.parse(s);
