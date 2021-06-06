@@ -5,7 +5,7 @@
 [![Gyro badge](https://img.shields.io/badge/gyro-nestedtext-blue)](https://astrolabe.pm/#/tag/nestedtext)
 
 
-A NestedText parser written in Zig 0.7 targeting [NestedText v2.0](https://nestedtext.org/en/v2.0/).
+A NestedText parser written in Zig 0.8 targeting [NestedText v2.0](https://nestedtext.org/en/v2.0/).
 
 See my [Zig NestedText Library blog post](https://www.lewisgaul.co.uk/blog/coding/2021/04/18/zig-nestedtext/).
 

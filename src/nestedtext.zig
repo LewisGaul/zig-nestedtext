@@ -104,8 +104,8 @@ pub const Value = union(enum) {
                 var json_map = json.ObjectMap.init(allocator);
                 var iter = inner.iterator();
                 while (iter.next()) |elem| {
-                    const json_value = try elem.value.toJsonValue(allocator);
-                    try json_map.put(elem.key, json_value);
+                    const json_value = try elem.value_ptr.*.toJsonValue(allocator);
+                    try json_map.put(elem.key_ptr.*, json_value);
                 }
                 return json.Value{ .Object = json_map };
             },
@@ -174,7 +174,7 @@ pub const Value = union(enum) {
                 while (iter.next()) |elem| {
                     if (!first_elem) try out_stream.writeByte('\n');
                     try out_stream.writeByteNTimes(' ', indent);
-                    const key = elem.key;
+                    const key = elem.key_ptr.*;
                     if (key.len > 0 and
                         std.mem.indexOfAny(u8, key, ":\r\n") == null and
                         std.mem.indexOfAny(u8, key[0..1], ">- \t") == null and
@@ -203,7 +203,7 @@ pub const Value = union(enum) {
                             try out_stream.writeByte(':');
                         }
                     }
-                    try elem.value.stringifyInternal(
+                    try elem.value_ptr.*.stringifyInternal(
                         options,
                         out_stream,
                         indent + options.indent,
@@ -230,7 +230,11 @@ fn fromJsonInternal(allocator: *Allocator, json_value: json.Value) anyerror!Valu
     switch (json_value) {
         .Null => return Value{ .String = "null" },
         .Bool => |inner| return Value{ .String = if (inner) "true" else "false" },
-        .Integer, .Float, .String => {
+        .Integer,
+        .Float,
+        .String,
+        .NumberString,
+        => {
             var buffer = ArrayList(u8).init(allocator);
             errdefer buffer.deinit();
             switch (json_value) {
@@ -242,6 +246,9 @@ fn fromJsonInternal(allocator: *Allocator, json_value: json.Value) anyerror!Valu
                 },
                 .String => |inner| {
                     try buffer.writer().print("{s}", .{inner});
+                },
+                .NumberString => |inner| {
+                    try buffer.writer().print("{e}", .{std.fmt.fmtSliceEscapeLower(inner)});
                 },
                 else => unreachable,
             }
@@ -259,8 +266,8 @@ fn fromJsonInternal(allocator: *Allocator, json_value: json.Value) anyerror!Valu
             var iter = inner.iterator();
             while (iter.next()) |elem| {
                 try map.put(
-                    try allocator.dupe(u8, elem.key),
-                    try fromJsonInternal(allocator, elem.value),
+                    try allocator.dupe(u8, elem.key_ptr.*),
+                    try fromJsonInternal(allocator, elem.value_ptr.*),
                 );
             }
             return Value{ .Object = map };
@@ -374,51 +381,46 @@ pub const Parser = struct {
             } else if (parseString(tab_stripped)) |index| {
                 kind = if (tab_stripped.len < stripped.len)
                     .InvalidTabIndent
-                else
-                    .{
-                        .String = .{
-                            .value = full_line[text.len - stripped.len + index ..],
-                        },
-                    };
+                else .{
+                    .String = .{
+                        .value = full_line[text.len - stripped.len + index ..],
+                    },
+                };
             } else if (parseList(tab_stripped)) |value| {
                 kind = if (tab_stripped.len < stripped.len)
                     .InvalidTabIndent
-                else
-                    .{
-                        .ListItem = .{
-                            .value = if (value.len > 0) value else null,
-                        },
-                    };
+                else .{
+                    .ListItem = .{
+                        .value = if (value.len > 0) value else null,
+                    },
+                };
             } else if (parseInlineContainer(tab_stripped)) {
                 kind = if (tab_stripped.len < stripped.len)
                     .InvalidTabIndent
-                else
-                    .{
-                        .InlineContainer = .{
-                            .value = std.mem.trimRight(u8, stripped, " \t"),
-                        },
-                    };
+                else .{
+                    .InlineContainer = .{
+                        .value = std.mem.trimRight(u8, stripped, " \t"),
+                    },
+                };
             } else if (parseObjectKey(tab_stripped)) |index| {
                 // Behaves just like string line.
                 kind = if (tab_stripped.len < stripped.len)
                     .InvalidTabIndent
-                else
-                    .{
-                        .ObjectKey = .{
-                            .value = full_line[text.len - stripped.len + index ..],
-                        },
-                    };
+                else .{
+                    .ObjectKey = .{
+                        .value = full_line[text.len - stripped.len + index ..],
+                    },
+                };
             } else if (parseObject(tab_stripped)) |result| {
                 kind = if (tab_stripped.len < stripped.len)
                     .InvalidTabIndent
-                else
-                    .{
-                        .ObjectItem = .{
-                            .key = result[0].?,
-                            // May be null if the value is on the following line(s).
-                            .value = result[1],
-                        },
-                    };
+                else .{
+                    .ObjectItem = .{
+                        .key = result[0].?,
+                        // May be null if the value is on the following line(s).
+                        .value = result[1],
+                    },
+                };
             } else {
                 kind = .Unrecognised;
             }
@@ -499,8 +501,7 @@ pub const Parser = struct {
 
         tree.root = if (lines.peekNext() != null)
             try p.readValue(&tree.arena.allocator, &lines) // Recursively parse
-        else
-            .{ .String = "" };
+        else .{ .String = "" };
 
         return tree;
     }
