@@ -103,8 +103,8 @@ pub const Value = union(enum) {
                 var json_map = json.ObjectMap.init(allocator);
                 var iter = inner.iterator();
                 while (iter.next()) |elem| {
-                    const json_value = try elem.value.toJsonValue(allocator);
-                    try json_map.put(elem.key, json_value);
+                    const json_value = try elem.value_ptr.*.toJsonValue(allocator);
+                    try json_map.put(elem.key_ptr.*, json_value);
                 }
                 return json.Value{ .Object = json_map };
             },
@@ -163,8 +163,8 @@ pub const Value = union(enum) {
                 while (iter.next()) |elem| {
                     if (!first_elem) try out_stream.writeByte('\n');
                     try out_stream.writeByteNTimes(' ', indent);
-                    try out_stream.print("{s}:", .{elem.key});
-                    try elem.value.stringifyInternal(
+                    try out_stream.print("{s}:", .{elem.key_ptr.*});
+                    try elem.value_ptr.*.stringifyInternal(
                         options,
                         out_stream,
                         indent + options.indent,
@@ -190,7 +190,7 @@ fn fromJsonInternal(allocator: *Allocator, json_value: json.Value) anyerror!Valu
     switch (json_value) {
         .Null => return Value{ .String = "null" },
         .Bool => |inner| return Value{ .String = if (inner) "true" else "false" },
-        .Integer, .Float, .String => {
+        .Integer, .Float, .String, .NumberString, => {
             var buffer = ArrayList(u8).init(allocator);
             errdefer buffer.deinit();
             switch (json_value) {
@@ -202,6 +202,9 @@ fn fromJsonInternal(allocator: *Allocator, json_value: json.Value) anyerror!Valu
                 },
                 .String => |inner| {
                     try buffer.writer().print("{s}", .{inner});
+                },
+                .NumberString => |inner| {
+                    try buffer.writer().print("{e}", .{std.fmt.fmtSliceEscapeLower(inner)});
                 },
                 else => unreachable,
             }
@@ -219,8 +222,8 @@ fn fromJsonInternal(allocator: *Allocator, json_value: json.Value) anyerror!Valu
             var iter = inner.iterator();
             while (iter.next()) |elem| {
                 try map.put(
-                    try allocator.dupe(u8, elem.key),
-                    try fromJsonInternal(allocator, elem.value),
+                    try allocator.dupe(u8, elem.key_ptr.*),
+                    try fromJsonInternal(allocator, elem.value_ptr.*),
                 );
             }
             return Value{ .Object = map };
