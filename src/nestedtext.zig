@@ -22,22 +22,19 @@ const logger = std.log.scoped(.nestedtext);
 fn readline(input: []const u8) ?[]const u8 {
     if (input.len == 0) return null;
     var idx: usize = 0;
-    while (idx < input.len) {
+    while (idx < input.len) : (idx += 1) {
         // Handle '\n'
-        if (input[idx] == '\n') {
-            idx += 1;
-            break;
-        }
+        if (input[idx] == '\n') return input[0 .. idx + 1];
         // Handle '\r'
         if (input[idx] == '\r') {
-            idx += 1;
             // Handle '\r\n'
-            if (input.len > idx and input[idx] == '\n') idx += 1;
-            break;
+            if (input.len > idx + 1 and input[idx + 1] == '\n')
+                return input[0 .. idx + 2]
+            else
+                return input[0 .. idx + 1];
         }
-        idx += 1;
     }
-    return input[0..idx];
+    return input;
 }
 
 // -----------------------------------------------------------------------------
@@ -45,9 +42,11 @@ fn readline(input: []const u8) ?[]const u8 {
 // -----------------------------------------------------------------------------
 
 pub const ParseError = error{
+    RootLevelIndent,
     InvalidIndentation,
     TabIndentation,
     InvalidItem,
+    MissingObjectValue,
     UnrecognisedLine,
     DuplicateKey,
 };
@@ -58,10 +57,29 @@ const StringifyOptions = struct {
 
 pub const ValueTree = struct {
     arena: ArenaAllocator,
-    root: Value,
+    root: ?Value,
 
     pub fn deinit(self: @This()) void {
         self.arena.deinit();
+    }
+
+    pub fn stringify(
+        self: @This(),
+        options: StringifyOptions,
+        out_stream: anytype,
+    ) @TypeOf(out_stream).Error!void {
+        if (self.root) |value|
+            try value.stringify(options, out_stream);
+    }
+
+    pub fn toJson(self: @This(), allocator: *Allocator) !json.ValueTree {
+        if (self.root) |value|
+            return value.toJson(allocator)
+        else
+            return json.ValueTree{
+                .arena = ArenaAllocator.init(allocator),
+                .root = json.Value.Null,
+            };
     }
 };
 
@@ -78,7 +96,7 @@ pub const Value = union(enum) {
         options: StringifyOptions,
         out_stream: anytype,
     ) @TypeOf(out_stream).Error!void {
-        try value.stringifyInternal(options, out_stream, 0, false);
+        try value.stringifyInternal(options, out_stream, 0, false, false);
     }
 
     pub fn toJson(value: @This(), allocator: *Allocator) !json.ValueTree {
@@ -117,21 +135,32 @@ pub const Value = union(enum) {
         out_stream: anytype,
         indent: usize,
         nested: bool,
+        force_multiline_string: bool,
     ) @TypeOf(out_stream).Error!void {
         switch (value) {
             .String => |string| {
-                if (std.mem.indexOfAny(u8, string, "\r\n") == null) {
+                if (nested and
+                    std.mem.indexOfAny(u8, string, "\r\n") == null and
+                    !force_multiline_string)
+                {
                     // Single-line string.
-                    if (nested and string.len > 0) try out_stream.writeByte(' ');
+                    if (string.len > 0) try out_stream.writeByte(' ');
                     try out_stream.writeAll(string);
-                } else {
+                } else else_blk: {
                     // Multi-line string.
                     if (nested) try out_stream.writeByte('\n');
+                    if (string.len == 0) {
+                        try out_stream.writeByteNTimes(' ', indent);
+                        try out_stream.writeByte('>');
+                        break :else_blk;
+                    }
                     var idx: usize = 0;
                     while (readline(string[idx..])) |line| {
                         try out_stream.writeByteNTimes(' ', indent);
                         try out_stream.writeByte('>');
-                        if (line.len > 0)
+                        if (line[0] == '\n' or line[0] == '\r')
+                            try out_stream.print("{s}", .{line})
+                        else if (line.len > 0)
                             try out_stream.print(" {s}", .{line});
                         idx += line.len;
                     }
@@ -144,6 +173,11 @@ pub const Value = union(enum) {
             },
             .List => |list| {
                 if (nested) try out_stream.writeByte('\n');
+                if (list.items.len == 0) {
+                    try out_stream.writeByteNTimes(' ', indent);
+                    try out_stream.writeAll("[]");
+                    return;
+                }
                 for (list.items) |*elem| {
                     if (elem != &list.items[0]) try out_stream.writeByte('\n');
                     try out_stream.writeByteNTimes(' ', indent);
@@ -153,22 +187,65 @@ pub const Value = union(enum) {
                         out_stream,
                         indent + options.indent,
                         true,
+                        false,
                     );
                 }
             },
             .Object => |object| {
                 if (nested) try out_stream.writeByte('\n');
+                if (object.count() == 0) {
+                    try out_stream.writeByteNTimes(' ', indent);
+                    try out_stream.writeAll("{}");
+                    return;
+                }
                 var iter = object.iterator();
                 var first_elem = true;
                 while (iter.next()) |elem| {
+                    var force_multiline_string_next = false;
                     if (!first_elem) try out_stream.writeByte('\n');
-                    try out_stream.writeByteNTimes(' ', indent);
-                    try out_stream.print("{s}:", .{elem.key_ptr.*});
+                    const key = elem.key_ptr.*;
+                    if (key.len > 0 and
+                        // No newlines
+                        std.mem.indexOfAny(u8, key, "\r\n") == null and
+                        // No leading whitespace or other special characters
+                        std.mem.indexOfAny(u8, key[0..1], "#[{ \t") == null and
+                        // No trailing whitespace
+                        std.mem.indexOfAny(u8, key[key.len - 1 ..], " \t") == null and
+                        // No leading special characters followed by a space
+                        !(std.mem.indexOfAny(u8, key[0..1], ">-") != null and (key.len == 1 or key[1] == ' ')) and
+                        // No internal colons followed by a space
+                        std.mem.indexOf(u8, key, ": ") == null)
+                    {
+                        // Simple key.
+                        try out_stream.writeByteNTimes(' ', indent);
+                        try out_stream.print("{s}:", .{key});
+                    } else else_blk: {
+                        // Multi-line key.
+                        force_multiline_string_next = true;
+                        if (key.len == 0) {
+                            try out_stream.writeByte(':');
+                            break :else_blk;
+                        }
+                        var idx: usize = 0;
+                        while (readline(key[idx..])) |line| {
+                            try out_stream.writeByteNTimes(' ', indent);
+                            try out_stream.writeByte(':');
+                            if (line.len > 0)
+                                try out_stream.print(" {s}", .{line});
+                            idx += line.len;
+                        }
+                        const last_char = key[key.len - 1];
+                        if (last_char == '\n' or last_char == '\r') {
+                            try out_stream.writeByteNTimes(' ', indent);
+                            try out_stream.writeByte(':');
+                        }
+                    }
                     try elem.value_ptr.*.stringifyInternal(
                         options,
                         out_stream,
                         indent + options.indent,
                         true,
+                        force_multiline_string_next,
                     );
                     first_elem = false;
                 }
@@ -265,10 +342,19 @@ pub const Parser = struct {
         Blank,
         Comment,
         String: struct { value: []const u8 },
-        List: struct { value: ?[]const u8 },
-        Object: struct { key: []const u8, value: ?[]const u8 },
+        ListItem: struct { value: ?[]const u8 },
+        ObjectItem: struct { key: []const u8, value: ?[]const u8 },
+        ObjectKey: struct { value: []const u8 },
+        InlineContainer: struct { value: []const u8 },
         Unrecognised,
         InvalidTabIndent,
+
+        pub fn isObject(self: @This()) bool {
+            return switch (self) {
+                .ObjectItem, .ObjectKey => true,
+                else => false,
+            };
+        }
     };
 
     const Line = struct {
@@ -338,15 +424,32 @@ pub const Parser = struct {
                 kind = if (tab_stripped.len < stripped.len)
                     .InvalidTabIndent
                 else .{
-                    .List = .{
+                    .ListItem = .{
                         .value = if (value.len > 0) value else null,
+                    },
+                };
+            } else if (parseInlineContainer(tab_stripped)) {
+                kind = if (tab_stripped.len < stripped.len)
+                    .InvalidTabIndent
+                else .{
+                    .InlineContainer = .{
+                        .value = std.mem.trimRight(u8, stripped, " \t"),
+                    },
+                };
+            } else if (parseObjectKey(tab_stripped)) |index| {
+                // Behaves just like string line.
+                kind = if (tab_stripped.len < stripped.len)
+                    .InvalidTabIndent
+                else .{
+                    .ObjectKey = .{
+                        .value = full_line[text.len - stripped.len + index ..],
                     },
                 };
             } else if (parseObject(tab_stripped)) |result| {
                 kind = if (tab_stripped.len < stripped.len)
                     .InvalidTabIndent
                 else .{
-                    .Object = .{
+                    .ObjectItem = .{
                         .key = result[0].?,
                         // May be null if the value is on the following line(s).
                         .value = result[1],
@@ -374,6 +477,15 @@ pub const Parser = struct {
             return null;
         }
 
+        fn parseObjectKey(text: []const u8) ?usize {
+            // Behaves just like string line.
+            assert(text.len > 0);
+            if (text[0] != ':') return null;
+            if (text.len == 1) return 1;
+            if (text[1] == ' ') return 2;
+            return null;
+        }
+
         fn parseObject(text: []const u8) ?[2]?[]const u8 {
             for (text) |char, i| {
                 if (char == ':') {
@@ -384,6 +496,23 @@ pub const Parser = struct {
                 }
             }
             return null;
+        }
+
+        fn parseInlineContainer(text: []const u8) bool {
+            assert(text.len > 0);
+            return (text[0] == '[' or text[0] == '{');
+        }
+    };
+
+    const CharIter = struct {
+        text: []const u8,
+        idx: usize = 0,
+
+        pub fn next(self: *@This()) ?u8 {
+            if (self.idx >= self.text.len) return null;
+            const char = self.text[self.idx];
+            self.idx += 1;
+            return char;
         }
     };
 
@@ -403,9 +532,17 @@ pub const Parser = struct {
 
         var lines = LinesIter.init(input);
 
-        tree.root = if (lines.peekNext() != null)
-            try p.readValue(&tree.arena.allocator, &lines) // Recursively parse
-        else .{ .String = "" };
+        tree.root = if (lines.peekNext()) |first_line| blk: {
+            if (first_line.depth > 0) {
+                p.maybeStoreDiags(
+                    first_line.lineno,
+                    "Unexpected indentation on first content line",
+                );
+                return ParseError.RootLevelIndent;
+            }
+            // Recursively parse
+            break :blk try p.readValue(&tree.arena.allocator, &lines);
+        } else null;
 
         return tree;
     }
@@ -416,8 +553,9 @@ pub const Parser = struct {
         const next_line = lines.peekNext().?;
         return switch (next_line.kind) {
             .String => .{ .String = try p.readString(allocator, lines) },
-            .List => .{ .List = try p.readList(allocator, lines) },
-            .Object => .{ .Object = try p.readObject(allocator, lines) },
+            .ListItem => .{ .List = try p.readList(allocator, lines) },
+            .ObjectItem, .ObjectKey => .{ .Object = try p.readObject(allocator, lines) },
+            .InlineContainer => try p.readInlineContainer(allocator, lines),
             .Unrecognised => {
                 p.maybeStoreDiags(next_line.lineno, "Unrecognised line type");
                 return error.UnrecognisedLine;
@@ -469,15 +607,15 @@ pub const Parser = struct {
         var array = Array.init(allocator);
         errdefer array.deinit();
 
-        assert(lines.peekNext().?.kind == .List);
+        assert(lines.peekNext().?.kind == .ListItem);
         const depth = lines.peekNext().?.depth;
 
         while (lines.next()) |line| {
-            if (line.kind != .List) {
+            if (line.kind != .ListItem) {
                 p.maybeStoreDiags(line.lineno, "Invalid line type following list item");
                 return error.InvalidItem;
             }
-            const list_line = line.kind.List;
+            const list_line = line.kind.ListItem;
             if (line.depth > depth) {
                 p.maybeStoreDiags(line.lineno, "Invalid indentation following list item");
                 return error.InvalidIndentation;
@@ -502,20 +640,27 @@ pub const Parser = struct {
         var map = Map.init(allocator);
         errdefer map.deinit();
 
-        assert(lines.peekNext().?.kind == .Object);
+        assert(lines.peekNext().?.kind.isObject());
         const depth = lines.peekNext().?.depth;
 
-        while (lines.next()) |line| {
-            if (line.kind != .Object) {
+        while (lines.peekNext()) |line| {
+            if (!line.kind.isObject()) {
                 p.maybeStoreDiags(line.lineno, "Invalid line type following object item");
                 return error.InvalidItem;
             }
-            const obj_line = line.kind.Object;
             if (line.depth > depth) {
                 p.maybeStoreDiags(line.lineno, "Invalid indentation following object item");
                 return error.InvalidIndentation;
             }
-            if (map.contains(obj_line.key)) {
+            const key = switch (line.kind) {
+                .ObjectItem => |obj_line| blk: {
+                    _ = lines.next(); // Advance iterator
+                    break :blk try p.maybeDupString(allocator, obj_line.key);
+                },
+                .ObjectKey => try p.readObjectKey(allocator, lines),
+                else => unreachable,
+            };
+            if (map.contains(key)) {
                 switch (p.options.duplicate_field_behavior) {
                     .UseFirst => continue,
                     .UseLast => {},
@@ -525,20 +670,255 @@ pub const Parser = struct {
                     },
                 }
             }
-
-            var value: Value = undefined;
-            if (obj_line.value) |str| {
-                value = .{ .String = try p.maybeDupString(allocator, str) };
-            } else if (lines.peekNext() != null and lines.peekNext().?.depth > depth) {
-                value = try p.readValue(allocator, lines);
-            } else {
-                value = .{ .String = "" };
-            }
-            try map.put(try p.maybeDupString(allocator, obj_line.key), value);
-
+            const value: Value = blk: {
+                if (line.kind == .ObjectItem and line.kind.ObjectItem.value != null) {
+                    const string = line.kind.ObjectItem.value.?;
+                    break :blk .{ .String = try p.maybeDupString(allocator, string) };
+                } else if (lines.peekNext() != null and lines.peekNext().?.depth > depth) {
+                    break :blk try p.readValue(allocator, lines);
+                } else if (line.kind == .ObjectKey) {
+                    p.maybeStoreDiags(line.lineno, "Multiline object key must be followed by value");
+                    return error.MissingObjectValue;
+                } else {
+                    break :blk .{ .String = "" };
+                }
+            };
+            try map.put(key, value);
             if (lines.peekNext() != null and lines.peekNext().?.depth < depth) break;
         }
         return map;
+    }
+
+    fn readObjectKey(p: Self, allocator: *Allocator, lines: *LinesIter) ![]const u8 {
+        // Handled just like strings.
+        var buffer = ArrayList(u8).init(allocator);
+        errdefer buffer.deinit();
+        var writer = buffer.writer();
+
+        assert(lines.peekNext().?.kind == .ObjectKey);
+        const depth = lines.peekNext().?.depth;
+
+        while (lines.next()) |line| {
+            if (line.kind != .ObjectKey) {
+                p.maybeStoreDiags(
+                    line.lineno,
+                    "Invalid line type following object key line",
+                );
+                return error.InvalidItem;
+            }
+            const is_last_line = lines.peekNext() == null or lines.peekNext().?.depth != depth;
+            const key_line = line.kind.ObjectKey;
+            if (line.depth > depth) {
+                p.maybeStoreDiags(line.lineno, "Invalid indentation of object key line");
+                return error.InvalidIndentation;
+            }
+            // String must be copied as it's not contiguous in-file.
+            if (is_last_line)
+                try writer.writeAll(std.mem.trimRight(u8, key_line.value, &[_]u8{ '\n', '\r' }))
+            else
+                try writer.writeAll(key_line.value);
+            if (is_last_line) break;
+        }
+        return buffer.items;
+    }
+
+    fn readInlineContainer(p: Self, allocator: *Allocator, lines: *LinesIter) !Value {
+        const line = lines.next().?;
+        assert(line.kind == .InlineContainer);
+        const line_text = line.kind.InlineContainer.value;
+
+        var text_iter = CharIter{ .text = line_text };
+        const value: Value = switch (text_iter.next().?) {
+            '[' => .{ .List = try p.parseInlineList(allocator, &text_iter, line.lineno) },
+            '{' => .{ .Object = try p.parseInlineObject(allocator, &text_iter, line.lineno) },
+            else => unreachable,
+        };
+        if (text_iter.idx != text_iter.text.len) {
+            p.maybeStoreDiags(line.lineno, "Unexpected text following closing bracket/brace");
+            return error.InvalidItem;
+        }
+
+        // Check next content line is dedented.
+        if (lines.peekNext() != null and lines.peekNext().?.depth >= line.depth) {
+            p.maybeStoreDiags(line.lineno, "Invalid indentation following list item");
+            return error.InvalidIndentation;
+        }
+
+        return value;
+    }
+
+    fn parseInlineList(p: Self, allocator: *Allocator, text_iter: *CharIter, lineno: usize) anyerror!Array {
+        var array = Array.init(allocator);
+        errdefer array.deinit();
+
+        // State machine:
+        //  1. Looking for value (or closing brace -> finished)
+        //  2. Looking for comma (or closing brace -> finished)
+        //  3. Looking for value
+        //  4. Looking for comma (or closing brace -> finished)
+        //  ...
+        const Token = enum {
+            Value,
+            ValueOrEnd,
+            CommaOrEnd,
+            Finished,
+        };
+
+        var next_token = Token.ValueOrEnd;
+        var parsed_value: ?Value = null;
+        // First character is the first one after the opening '['.
+        while (text_iter.next()) |char| {
+            // Skip over whitespace between the tokens.
+            if (char == ' ' or char == '\t') continue;
+            // Check the character and/or consume some text for the expected token.
+            switch (next_token) {
+                .Value, .ValueOrEnd => {
+                    if (next_token == .ValueOrEnd and char == ']') {
+                        next_token = .Finished;
+                        break;
+                    }
+                    if (char == '[')
+                        parsed_value = .{
+                            .List = try p.parseInlineList(allocator, text_iter, lineno),
+                        }
+                    else if (char == '{')
+                        parsed_value = .{
+                            .Object = try p.parseInlineObject(allocator, text_iter, lineno),
+                        }
+                    else if (p.parseInlineContainerString(text_iter, "[]{},")) |value|
+                        parsed_value = .{ .String = try p.maybeDupString(allocator, value) }
+                    else {
+                        p.maybeStoreDiags(lineno, "Expected an inline list value");
+                        return error.InvalidItem;
+                    }
+                    next_token = .CommaOrEnd;
+                },
+                .CommaOrEnd => {
+                    if (char != ',' and char != ']') {
+                        p.maybeStoreDiags(lineno, "Unexpected character after inline list value");
+                        return error.InvalidItem;
+                    }
+                    try array.append(parsed_value.?);
+                    parsed_value = null;
+                    if (char == ']') {
+                        next_token = .Finished;
+                        break;
+                    }
+                    next_token = .Value;
+                },
+                .Finished => unreachable,
+            }
+        }
+        if (next_token != .Finished) {
+            p.maybeStoreDiags(lineno, "Missing closing brace ']'");
+            return error.InvalidItem;
+        }
+
+        return array;
+    }
+
+    fn parseInlineObject(p: Self, allocator: *Allocator, text_iter: *CharIter, lineno: usize) anyerror!Map {
+        var map = Map.init(allocator);
+        errdefer map.deinit();
+
+        // State machine:
+        //  1. Looking for key (or closing brace -> finished)
+        //  2. Looking for colon
+        //  3. Looking for value
+        //  4. Looking for comma (or closing brace -> finished)
+        //  5. Looking for key
+        //  6. Looking for colon
+        //  ...
+        const Token = enum {
+            Key,
+            KeyOrEnd,
+            Colon,
+            Value,
+            CommaOrEnd,
+            Finished,
+        };
+
+        var next_token = Token.KeyOrEnd;
+        var parsed_key: ?[]const u8 = null;
+        var parsed_value: ?Value = null;
+        // First character is the first one after the opening '{'.
+        while (text_iter.next()) |char| {
+            // Skip over whitespace between the tokens.
+            if (char == ' ' or char == '\t') continue;
+            // Check the character and/or consume some text for the expected token.
+            switch (next_token) {
+                .Key, .KeyOrEnd => {
+                    if (next_token == .KeyOrEnd and char == '}') {
+                        next_token = .Finished;
+                        break;
+                    }
+                    if (p.parseInlineContainerString(text_iter, "[]{},:")) |key|
+                        parsed_key = key
+                    else {
+                        p.maybeStoreDiags(lineno, "Expected an inline object key");
+                        return error.InvalidItem;
+                    }
+                    next_token = .Colon;
+                },
+                .Colon => {
+                    if (char != ':') {
+                        p.maybeStoreDiags(lineno, "Unexpected character after inline object key");
+                        return error.InvalidItem;
+                    }
+                    next_token = .Value;
+                },
+                .Value => {
+                    if (char == '[')
+                        parsed_value = .{
+                            .List = try p.parseInlineList(allocator, text_iter, lineno),
+                        }
+                    else if (char == '{')
+                        parsed_value = .{
+                            .Object = try p.parseInlineObject(allocator, text_iter, lineno),
+                        }
+                    else if (p.parseInlineContainerString(text_iter, "[]{},:")) |value|
+                        parsed_value = .{ .String = try p.maybeDupString(allocator, value) }
+                    else {
+                        p.maybeStoreDiags(lineno, "Expected an inline object value");
+                        return error.InvalidItem;
+                    }
+                    next_token = .CommaOrEnd;
+                },
+                .CommaOrEnd => {
+                    if (char != ',' and char != '}') {
+                        p.maybeStoreDiags(lineno, "Unexpected character after inline object value");
+                        return error.InvalidItem;
+                    }
+                    try map.put(parsed_key.?, parsed_value.?);
+                    parsed_key = null;
+                    parsed_value = null;
+                    if (char == '}') {
+                        next_token = .Finished;
+                        break;
+                    }
+                    next_token = .Key;
+                },
+                .Finished => unreachable,
+            }
+        }
+        if (next_token != .Finished) {
+            p.maybeStoreDiags(lineno, "Missing closing brace '}'");
+            return error.InvalidItem;
+        }
+        return map;
+    }
+
+    fn parseInlineContainerString(p: Self, text_iter: *CharIter, disallowed_chars: []const u8) ?[]const u8 {
+        const start_idx = text_iter.idx - 1;
+        const end_idx = blk: {
+            if (std.mem.indexOfAnyPos(u8, text_iter.text, start_idx, disallowed_chars)) |idx|
+                break :blk idx
+            else
+                break :blk text_iter.text.len;
+        };
+        if (end_idx == start_idx) return null; // Zero-length (empty string)
+        text_iter.idx = end_idx;
+        return std.mem.trim(u8, text_iter.text[start_idx..end_idx], " \t");
     }
 
     fn maybeDupString(p: Self, allocator: *Allocator, string: []const u8) ![]const u8 {
@@ -566,36 +946,36 @@ test "parse empty" {
     var tree = try p.parse("");
     defer tree.deinit();
 
-    try testing.expectEqual(Value{ .String = "" }, tree.root);
+    try testing.expectEqual(@as(?Value, null), tree.root);
 }
 
 test "basic parse: string" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ > this is a
-        \\ > multiline
-        \\ > string
+        \\> this is a
+        \\> multiline
+        \\> string
     ;
 
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    try testing.expectEqualStrings("this is a\nmultiline\nstring", tree.root.String);
+    try testing.expectEqualStrings("this is a\nmultiline\nstring", tree.root.?.String);
 }
 
 test "basic parse: list" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ - foo
-        \\ - bar
+        \\- foo
+        \\- bar
     ;
 
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    const array: Array = tree.root.List;
+    const array: Array = tree.root.?.List;
 
     try testing.expectEqualStrings("foo", array.items[0].String);
     try testing.expectEqualStrings("bar", array.items[1].String);
@@ -605,14 +985,14 @@ test "basic parse: object" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ foo: 1
-        \\ bar: False
+        \\foo: 1
+        \\bar: False
     ;
 
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    const map: Map = tree.root.Object;
+    const map: Map = tree.root.?.Object;
 
     try testing.expectEqualStrings("1", map.get("foo").?.String);
     try testing.expectEqualStrings("False", map.get("bar").?.String);
@@ -622,17 +1002,17 @@ test "nested parse: object inside object" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ foo: 1
-        \\ bar:
-        \\   nest1: 2
-        \\   nest2: 3
-        \\ baz:
+        \\foo: 1
+        \\bar:
+        \\  nest1: 2
+        \\  nest2: 3
+        \\baz:
     ;
 
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    const map: Map = tree.root.Object;
+    const map: Map = tree.root.?.Object;
 
     try testing.expectEqualStrings("1", map.get("foo").?.String);
     try testing.expectEqualStrings("", map.get("baz").?.String);
@@ -646,8 +1026,8 @@ test "failed parse: multi-line string indent" {
     p.diags = &diags;
 
     const s =
-        \\ > foo
-        \\   > bar
+        \\> foo
+        \\  > bar
     ;
 
     try testing.expectError(error.InvalidIndentation, p.parse(s));
@@ -656,18 +1036,6 @@ test "failed parse: multi-line string indent" {
         "Invalid indentation of multi-line string",
         diags.ParseError.message,
     );
-}
-
-test "stringify: empty" {
-    var p = Parser.init(testing.allocator, .{});
-
-    var tree = try p.parse("");
-    defer tree.deinit();
-
-    var buffer: [128]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
-    try tree.root.stringify(.{}, fbs.writer());
-    try testing.expectEqualStrings("", fbs.getWritten());
 }
 
 test "stringify: string" {
@@ -684,7 +1052,7 @@ test "stringify: string" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try tree.root.stringify(.{}, fbs.writer());
+    try tree.root.?.stringify(.{}, fbs.writer());
     try testing.expectEqualStrings(s, fbs.getWritten());
 }
 
@@ -701,7 +1069,7 @@ test "stringify: list" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try tree.root.stringify(.{}, fbs.writer());
+    try tree.root.?.stringify(.{}, fbs.writer());
     try testing.expectEqualStrings(s, fbs.getWritten());
 }
 
@@ -718,7 +1086,7 @@ test "stringify: object" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try tree.root.stringify(.{}, fbs.writer());
+    try tree.root.?.stringify(.{}, fbs.writer());
     try testing.expectEqualStrings(s, fbs.getWritten());
 }
 
@@ -737,38 +1105,23 @@ test "stringify: multiline string inside object" {
 
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try tree.root.stringify(.{}, fbs.writer());
+    try tree.root.?.stringify(.{}, fbs.writer());
     try testing.expectEqualStrings(s, fbs.getWritten());
-}
-
-test "convert to JSON: empty" {
-    var p = Parser.init(testing.allocator, .{});
-
-    var tree = try p.parse("");
-    defer tree.deinit();
-
-    var json_tree = try tree.root.toJson(testing.allocator);
-    defer json_tree.deinit();
-
-    var buffer: [128]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
-    try json_tree.root.jsonStringify(.{}, fbs.writer());
-    try testing.expectEqualStrings("\"\"", fbs.getWritten());
 }
 
 test "convert to JSON: string" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ > this is a
-        \\ > multiline
-        \\ > string
+        \\> this is a
+        \\> multiline
+        \\> string
     ;
 
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var json_tree = try tree.root.toJson(testing.allocator);
+    var json_tree = try tree.root.?.toJson(testing.allocator);
     defer json_tree.deinit();
 
     var buffer: [128]u8 = undefined;
@@ -781,14 +1134,14 @@ test "convert to JSON: list" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ - foo
-        \\ - bar
+        \\- foo
+        \\- bar
     ;
 
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var json_tree = try tree.root.toJson(testing.allocator);
+    var json_tree = try tree.root.?.toJson(testing.allocator);
     defer json_tree.deinit();
 
     var buffer: [128]u8 = undefined;
@@ -804,14 +1157,14 @@ test "convert to JSON: object" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ foo: 1
-        \\ bar: False
+        \\foo: 1
+        \\bar: False
     ;
 
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var json_tree = try tree.root.toJson(testing.allocator);
+    var json_tree = try tree.root.?.toJson(testing.allocator);
     defer json_tree.deinit();
 
     var buffer: [128]u8 = undefined;
@@ -828,15 +1181,15 @@ test "convert to JSON: object inside object" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ bar:
-        \\   nest1: 1
-        \\   nest2: 2
+        \\bar:
+        \\  nest1: 1
+        \\  nest2: 2
     ;
 
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var json_tree = try tree.root.toJson(testing.allocator);
+    var json_tree = try tree.root.?.toJson(testing.allocator);
     defer json_tree.deinit();
 
     var buffer: [128]u8 = undefined;
@@ -852,15 +1205,15 @@ test "convert to JSON: list inside object" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ bar:
-        \\   - nest1
-        \\   - nest2
+        \\bar:
+        \\  - nest1
+        \\  - nest2
     ;
 
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var json_tree = try tree.root.toJson(testing.allocator);
+    var json_tree = try tree.root.?.toJson(testing.allocator);
     defer json_tree.deinit();
 
     var buffer: [128]u8 = undefined;
@@ -876,15 +1229,15 @@ test "convert to JSON: multiline string inside object" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ foo:
-        \\   > multi
-        \\   > line
+        \\foo:
+        \\  > multi
+        \\  > line
     ;
 
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var json_tree = try tree.root.toJson(testing.allocator);
+    var json_tree = try tree.root.?.toJson(testing.allocator);
     defer json_tree.deinit();
 
     var buffer: [128]u8 = undefined;
@@ -900,16 +1253,16 @@ test "convert to JSON: multiline string inside list" {
     var p = Parser.init(testing.allocator, .{});
 
     const s =
-        \\ -
-        \\   > multi
-        \\   > line
-        \\ -
+        \\-
+        \\  > multi
+        \\  > line
+        \\-
     ;
 
     var tree = try p.parse(s);
     defer tree.deinit();
 
-    var json_tree = try tree.root.toJson(testing.allocator);
+    var json_tree = try tree.root.?.toJson(testing.allocator);
     defer json_tree.deinit();
 
     var buffer: [128]u8 = undefined;

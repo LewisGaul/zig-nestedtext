@@ -15,20 +15,14 @@ const testcases_path = "tests/official_tests/test_cases/";
 const max_file_size: usize = 1024 * 1024;
 
 const skipped_testcases = [_][]const u8{
-    "dict_02", // Bug (dumping keys with newlines)
-    "dict_03", // Key quoting - to be removed from spec
-    "dict_05", // Root-level leading whitespace (bug...)
-    "dict_17", // Key quoting - to be removed from spec
     "dict_21", // Unrepresentable
     "dict_22", // Unrepresentable
-    "dict_23", // Key quoting - to be removed from spec
-    "empty_1", // Bad testcase - empty file maps to null??
-    "holistic_1", // Key quoting - to be removed from spec
-    "list_5", // Root-level leading whitespace (bug...)
-    "string_multiline_07", // Root-level leading whitespace (bug...)
+    // TODO: Testcase for different line endings in same file (error lineno)
+    // TODO: Testcase for multiline key without following value (error lineno)
+    // TODO: Testcase for bad object keys ('-', '>', ':', '[', '{')
 };
 
-const fail_fast = false;
+const fail_fast = true;
 
 const ParseErrorInfo = struct {
     lineno: usize,
@@ -60,7 +54,7 @@ fn expectEqualStrings(expected: []const u8, actual: []const u8) !void {
         print("found:\n", .{});
         printIndicatorLine(actual, diff_index);
 
-        return error.ExpectFailure;
+        return error.TestingAssert;
     }
 }
 
@@ -142,7 +136,7 @@ fn testParseSuccess(input_nt: []const u8, expected_json: []const u8) !void {
         return e;
     };
     defer nt_tree.deinit();
-    var json_tree = try nt_tree.root.toJson(testing.allocator);
+    var json_tree = try nt_tree.toJson(testing.allocator);
     defer json_tree.deinit();
 
     var buffer = std.ArrayList(u8).init(testing.allocator);
@@ -183,14 +177,9 @@ fn testDumpSuccess(input_json: []const u8, expected_nt: []const u8) !void {
 
     var buffer = std.ArrayList(u8).init(testing.allocator);
     defer buffer.deinit();
-    try nt_tree.root.stringify(.{}, buffer.writer());
+    try nt_tree.stringify(.{ .indent = 4 }, buffer.writer());
 
-    // TODO: Not working because of unordered JSON parsing in std.
-    logger.warn(
-        "Skipping checking dumped output (std.json ignores JSON object order)",
-        .{},
-    );
-    // try expectEqualStrings(expected_nt, buffer.items);
+    try expectEqualStrings(expected_nt, buffer.items);
 }
 
 fn testSingle(allocator: *Allocator, dir: std.fs.Dir) !void {
