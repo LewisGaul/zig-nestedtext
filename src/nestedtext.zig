@@ -190,7 +190,11 @@ fn fromJsonInternal(allocator: *Allocator, json_value: json.Value) anyerror!Valu
     switch (json_value) {
         .Null => return Value{ .String = "null" },
         .Bool => |inner| return Value{ .String = if (inner) "true" else "false" },
-        .Integer, .Float, .String, .NumberString, => {
+        .Integer,
+        .Float,
+        .String,
+        .NumberString,
+        => {
             var buffer = ArrayList(u8).init(allocator);
             errdefer buffer.deinit();
             switch (json_value) {
@@ -328,32 +332,29 @@ pub const Parser = struct {
             } else if (parseString(tab_stripped)) |index| {
                 kind = if (tab_stripped.len < stripped.len)
                     .InvalidTabIndent
-                else
-                    .{
-                        .String = .{
-                            .value = full_line[text.len - stripped.len + index ..],
-                        },
-                    };
+                else .{
+                    .String = .{
+                        .value = full_line[text.len - stripped.len + index ..],
+                    },
+                };
             } else if (parseList(tab_stripped)) |value| {
                 kind = if (tab_stripped.len < stripped.len)
                     .InvalidTabIndent
-                else
-                    .{
-                        .List = .{
-                            .value = if (value.len > 0) value else null,
-                        },
-                    };
+                else .{
+                    .List = .{
+                        .value = if (value.len > 0) value else null,
+                    },
+                };
             } else if (parseObject(tab_stripped)) |result| {
                 kind = if (tab_stripped.len < stripped.len)
                     .InvalidTabIndent
-                else
-                    .{
-                        .Object = .{
-                            .key = result[0].?,
-                            // May be null if the value is on the following line(s).
-                            .value = result[1],
-                        },
-                    };
+                else .{
+                    .Object = .{
+                        .key = result[0].?,
+                        // May be null if the value is on the following line(s).
+                        .value = result[1],
+                    },
+                };
             } else {
                 kind = .Unrecognised;
             }
@@ -407,8 +408,7 @@ pub const Parser = struct {
 
         tree.root = if (lines.peekNext() != null)
             try p.readValue(&tree.arena.allocator, &lines) // Recursively parse
-        else
-            .{ .String = "" };
+        else .{ .String = "" };
 
         return tree;
     }
