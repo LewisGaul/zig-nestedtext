@@ -27,7 +27,6 @@ const skipped_testcases = [_][]const u8{
     "inline_list_01", // Trailing comma (bug/spec to change?)
     "list_5", // Root-level leading whitespace (bug...)
     "string_multiline_07", // Root-level leading whitespace (bug...)
-    "string_multiline_12", // Dumping CR - bug in official tests, see https://github.com/KenKundert/nestedtext_tests/issues/5
     // TODO: Testcase for different line endings in same file (error lineno)
     // TODO: Testcase for multiline key without following value (error lineno)
     // TODO: Testcase for bad object keys ('-', '>', ':', '[', '{')

@@ -3,4 +3,4 @@
 	url = https://github.com/Hejsil/zig-clap
 [submodule "tests/official_tests"]
 	path = tests/official_tests
-	url = git@github.com:KenKundert/nestedtext_tests.git
+	url = git@github.com:LewisGaul/nestedtext_tests.git
