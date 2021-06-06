@@ -172,11 +172,15 @@ fn mainWorker() WriteError!u8 {
                 }
                 return 1;
             };
+            if (tree.root == null) {
+                try stderr.print("An empty file is not valid NestedText\n", .{});
+                return 1;
+            }
             logger.debug("{d:6} Parsed NestedText", .{elapsed()});
 
             switch (args.output_format) {
                 .Json => {
-                    var json_tree = tree.root.toJson(allocator) catch {
+                    var json_tree = tree.root.?.toJson(allocator) catch {
                         try stderr.writeAll("Failed to convert NestedText to JSON\n");
                         return 1;
                     };
@@ -185,7 +189,7 @@ fn mainWorker() WriteError!u8 {
                     logger.debug("{d:6} Stringified JSON", .{elapsed()});
                 },
                 .NestedText => {
-                    try tree.root.stringify(.{}, out_stream);
+                    try tree.root.?.stringify(.{}, out_stream);
                     logger.debug("{d:6} Stringified NestedText", .{elapsed()});
                 },
             }
@@ -209,7 +213,7 @@ fn mainWorker() WriteError!u8 {
                         return 1;
                     };
                     logger.debug("{d:6} Converted to NestedText", .{elapsed()});
-                    try nt_tree.root.stringify(.{}, out_stream);
+                    try nt_tree.root.?.stringify(.{}, out_stream);
                     logger.debug("{d:6} Stringified NestedText", .{elapsed()});
                 },
             }

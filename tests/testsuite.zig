@@ -15,14 +15,12 @@ const testcases_path = "tests/official_tests/test_cases/";
 const max_file_size: usize = 1024 * 1024;
 
 const skipped_testcases = [_][]const u8{
-    "dict_02", // Bug (dumping keys with newlines)
     "dict_05", // Root-level leading whitespace (bug...)
     "dict_16", // Dumping keys with colons
     "dict_20", // Dumping keys with colons
     "dict_21", // Unrepresentable
     "dict_22", // Unrepresentable
     "dict_26", // Dumping keys with colons
-    "empty_1", // Bad testcase - empty file maps to null??
     "inline_dict_01", // Empty key (bug/spec to change?)
     "inline_list_01", // Trailing comma (bug/spec to change?)
     "list_5", // Root-level leading whitespace (bug...)
@@ -146,7 +144,7 @@ fn testParseSuccess(input_nt: []const u8, expected_json: []const u8) !void {
         return e;
     };
     defer nt_tree.deinit();
-    var json_tree = try nt_tree.root.toJson(testing.allocator);
+    var json_tree = try nt_tree.toJson(testing.allocator);
     defer json_tree.deinit();
 
     var buffer = std.ArrayList(u8).init(testing.allocator);
@@ -187,7 +185,7 @@ fn testDumpSuccess(input_json: []const u8, expected_nt: []const u8) !void {
 
     var buffer = std.ArrayList(u8).init(testing.allocator);
     defer buffer.deinit();
-    try nt_tree.root.stringify(.{ .indent = 4 }, buffer.writer());
+    try nt_tree.stringify(.{ .indent = 4 }, buffer.writer());
 
     try expectEqualStrings(expected_nt, buffer.items);
 }
