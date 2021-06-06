@@ -22,22 +22,19 @@ const logger = std.log.scoped(.nestedtext);
 fn readline(input: []const u8) ?[]const u8 {
     if (input.len == 0) return null;
     var idx: usize = 0;
-    while (idx < input.len) {
+    while (idx < input.len) : (idx += 1) {
         // Handle '\n'
-        if (input[idx] == '\n') {
-            idx += 1;
-            break;
-        }
+        if (input[idx] == '\n') return input[0 .. idx + 1];
         // Handle '\r'
         if (input[idx] == '\r') {
-            idx += 1;
             // Handle '\r\n'
-            if (input.len > idx and input[idx] == '\n') idx += 1;
-            break;
+            if (input.len > idx + 1 and input[idx + 1] == '\n')
+                return input[0 .. idx + 2]
+            else
+                return input[0 .. idx + 1];
         }
-        idx += 1;
     }
-    return input[0..idx];
+    return input;
 }
 
 // -----------------------------------------------------------------------------
@@ -133,6 +130,7 @@ pub const Value = union(enum) {
                     // Multi-line string.
                     if (nested) try out_stream.writeByte('\n');
                     if (string.len == 0) {
+                        try out_stream.writeByteNTimes(' ', indent);
                         try out_stream.writeByte('>');
                         break :else_blk;
                     }
@@ -140,7 +138,9 @@ pub const Value = union(enum) {
                     while (readline(string[idx..])) |line| {
                         try out_stream.writeByteNTimes(' ', indent);
                         try out_stream.writeByte('>');
-                        if (line.len > 0)
+                        if (line[0] == '\n' or line[0] == '\r')
+                            try out_stream.print("{s}", .{line})
+                        else if (line.len > 0)
                             try out_stream.print(" {s}", .{line});
                         idx += line.len;
                     }
@@ -153,6 +153,10 @@ pub const Value = union(enum) {
             },
             .List => |list| {
                 if (nested) try out_stream.writeByte('\n');
+                if (list.items.len == 0) {
+                    try out_stream.writeAll("[]");
+                    return;
+                }
                 for (list.items) |*elem| {
                     if (elem != &list.items[0]) try out_stream.writeByte('\n');
                     try out_stream.writeByteNTimes(' ', indent);
@@ -167,20 +171,24 @@ pub const Value = union(enum) {
                 }
             },
             .Object => |object| {
-                var force_multiline_string_next = false;
                 if (nested) try out_stream.writeByte('\n');
+                if (object.count() == 0) {
+                    try out_stream.writeAll("{}");
+                    return;
+                }
                 var iter = object.iterator();
                 var first_elem = true;
                 while (iter.next()) |elem| {
+                    var force_multiline_string_next = false;
                     if (!first_elem) try out_stream.writeByte('\n');
-                    try out_stream.writeByteNTimes(' ', indent);
                     const key = elem.key_ptr.*;
                     if (key.len > 0 and
                         std.mem.indexOfAny(u8, key, ":\r\n") == null and
-                        std.mem.indexOfAny(u8, key[0..1], ">- \t") == null and
+                        std.mem.indexOfAny(u8, key[0..1], "#>- \t") == null and
                         std.mem.indexOfAny(u8, key[key.len - 1 ..], " \t") == null)
                     {
                         // Simple key.
+                        try out_stream.writeByteNTimes(' ', indent);
                         try out_stream.print("{s}:", .{key});
                     } else else_blk: {
                         // Multi-line key.

@@ -17,19 +17,23 @@ const max_file_size: usize = 1024 * 1024;
 const skipped_testcases = [_][]const u8{
     "dict_02", // Bug (dumping keys with newlines)
     "dict_05", // Root-level leading whitespace (bug...)
+    "dict_16", // Dumping keys with colons
+    "dict_20", // Dumping keys with colons
     "dict_21", // Unrepresentable
     "dict_22", // Unrepresentable
+    "dict_26", // Dumping keys with colons
     "empty_1", // Bad testcase - empty file maps to null??
     "inline_dict_01", // Empty key (bug/spec to change?)
     "inline_list_01", // Trailing comma (bug/spec to change?)
     "list_5", // Root-level leading whitespace (bug...)
     "string_multiline_07", // Root-level leading whitespace (bug...)
+    "string_multiline_12", // Dumping CR - bug in official tests, see https://github.com/KenKundert/nestedtext_tests/issues/5
     // TODO: Testcase for different line endings in same file (error lineno)
     // TODO: Testcase for multiline key without following value (error lineno)
     // TODO: Testcase for bad object keys ('-', '>', ':', '[', '{')
 };
 
-const fail_fast = false;
+const fail_fast = true;
 
 const ParseErrorInfo = struct {
     lineno: usize,
@@ -184,14 +188,9 @@ fn testDumpSuccess(input_json: []const u8, expected_nt: []const u8) !void {
 
     var buffer = std.ArrayList(u8).init(testing.allocator);
     defer buffer.deinit();
-    try nt_tree.root.stringify(.{}, buffer.writer());
+    try nt_tree.root.stringify(.{ .indent = 4 }, buffer.writer());
 
-    // TODO: Not working because of unordered JSON parsing in std.
-    logger.warn(
-        "Skipping checking dumped output (std.json ignores JSON object order)",
-        .{},
-    );
-    // try expectEqualStrings(expected_nt, buffer.items);
+    try expectEqualStrings(expected_nt, buffer.items);
 }
 
 fn testSingle(allocator: *Allocator, dir: std.fs.Dir) !void {
