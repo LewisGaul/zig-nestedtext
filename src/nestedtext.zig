@@ -554,39 +554,97 @@ pub const Parser = struct {
         var tree = try p.parse(input);
         defer tree.deinit();
 
-        if (tree.root) |root|
-            return p.parseTypedInternal(T, root)
-        else
+        if (tree.root) |root| {
+            return p.parseTypedInternal(T, root);
+        } else {
             // TODO
             return error.NotYetHandlingEmptyFile;
+        }
     }
 
     fn parseTypedInternal(p: Self, comptime T: type, value: Value) !T {
-        switch (value) {
-            .String => |str| {
-                switch (@typeInfo(T)) {
-                    .Bool => {
+        switch (@typeInfo(T)) {
+            .Bool => {
+                switch (value) {
+                    .String => |str| {
                         if (std.mem.eql(u8, str, "true") or
                             std.mem.eql(u8, str, "True") or
                             std.mem.eql(u8, str, "TRUE"))
-                            return true
-                        else if (std.mem.eql(u8, str, "false") or
+                        {
+                            return true;
+                        } else if (std.mem.eql(u8, str, "false") or
                             std.mem.eql(u8, str, "False") or
                             std.mem.eql(u8, str, "FALSE"))
+                        {
                             return false;
+                        }
                     },
-                    .Int, .ComptimeInt => {
-                        return try std.fmt.parseInt(T, str, 0);
-                    },
-                    .Float, .ComptimeFloat => {
-                        return try std.fmt.parseFloat(T, str);
-                    },
-                    else => {},
+                    else => return error.UnexpectedType,
                 }
             },
-            else => {},
+            .Int, .ComptimeInt => {
+                switch (value) {
+                    .String => |str| return try std.fmt.parseInt(T, str, 0),
+                    else => return error.UnexpectedType,
+                }
+            },
+            .Float, .ComptimeFloat => {
+                switch (value) {
+                    .String => |str| return try std.fmt.parseFloat(T, str),
+                    else => return error.UnexpectedType,
+                }
+            },
+            .Optional => |optional_info| {
+                switch (value) {
+                    .String => |str| {
+                        if (std.mem.eql(u8, str, "null") or
+                            std.mem.eql(u8, str, "NULL") or
+                            str.len == 0)
+                        {
+                            return null;
+                        }
+                    },
+                    else => {
+                        // Fall through.
+                    },
+                }
+                return try p.parseTypedInternal(optional_info.child, value);
+            },
+            .Enum => |enum_info| {
+                switch (value) {
+                    .String => |str| return try std.meta.stringToEnum(T, str),
+                    else => return error.UnexpectedType,
+                }
+            },
+            .Union => |union_info| {
+                // TODO
+                return error.NotImplemented;
+            },
+            .Struct => |struct_info| {
+                switch (value) {
+                    .Object => |obj| {
+                        // TODO
+                        return error.NotImplemented;
+                    },
+                    else => return error.UnexpectedType,
+                }
+            },
+            .Array => |array_info| {
+                switch (value) {
+                    .List => |list| {
+                        // TODO
+                        return error.NotImplemented;
+                    },
+                    else => return error.UnexpectedType,
+                }
+            },
+            .Pointer => |ptr_info| {
+                // TODO
+                return error.NotImplemented;
+            },
+            else => @compileError("Unable to parse into type '" ++ @typeName(T) ++ "'"),
         }
-        return error.NotImplemented;
+        unreachable;
     }
 
     fn readValue(p: Self, allocator: *Allocator, lines: *LinesIter) anyerror!Value {
@@ -1102,6 +1160,15 @@ test "typed parse: float" {
     var p = Parser.init(testing.allocator, .{});
 
     try testing.expectEqual(@as(f64, 1.1), try p.parseTyped(f64, "> 1.1"));
+}
+
+test "typed parse: optional" {
+    var p = Parser.init(testing.allocator, .{});
+
+    try testing.expectEqual(@as(?isize, -42), try p.parseTyped(?isize, "> -000_042"));
+    try testing.expectEqual(@as(?[0]u8, null), try p.parseTyped(?[0]u8, "> null"));
+    try testing.expectEqual(@as(?bool, null), try p.parseTyped(?bool, "> NULL"));
+    try testing.expectEqual(@as(?f64, null), try p.parseTyped(?f64, ">"));
 }
 
 test "stringify: string" {
