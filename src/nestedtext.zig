@@ -51,8 +51,20 @@ pub const ParseError = error{
     DuplicateKey,
 };
 
-const StringifyOptions = struct {
+pub const StringifyOptions = struct {
     indent: usize = 2,
+};
+
+pub const ParseOptions = struct {
+    /// Behaviour when a duplicate field is encountered.
+    duplicate_field_behavior: enum {
+        UseFirst,
+        UseLast,
+        Error,
+    } = .Error,
+
+    /// Whether to copy strings or return existing slices.
+    copy_strings: bool = true,
 };
 
 pub const ValueTree = struct {
@@ -316,22 +328,10 @@ fn fromJsonInternal(allocator: *Allocator, json_value: json.Value) anyerror!Valu
 pub const Parser = struct {
     allocator: *Allocator,
     options: ParseOptions,
-    /// If non-null, this struct is filled in by each call to parse().
+    /// If non-null, this struct is filled in by each call to parse() or parseTyped().
     diags: ?*Diags = null,
 
     const Self = @This();
-
-    pub const ParseOptions = struct {
-        /// Behaviour when a duplicate field is encountered.
-        duplicate_field_behavior: enum {
-            UseFirst,
-            UseLast,
-            Error,
-        } = .Error,
-
-        /// Whether to copy strings or return existing slices.
-        copy_strings: bool = true,
-    };
 
     pub const Diags = union(enum) {
         Empty,
@@ -523,6 +523,7 @@ pub const Parser = struct {
         };
     }
 
+    /// Parse into a tree of 'Value's.
     /// Memory owned by caller on success - free with 'ValueTree.deinit()'.
     pub fn parse(p: Self, input: []const u8) !ValueTree {
         if (p.diags) |diags| diags.* = Diags.Empty;
@@ -545,6 +546,47 @@ pub const Parser = struct {
         } else null;
 
         return tree;
+    }
+
+    /// Parse into a given type.
+    /// Memory owned by caller on success - free with 'Parser.parseTypedFree()'.
+    pub fn parseTyped(p: Self, comptime T: type, input: []const u8) !T {
+        var tree = try p.parse(input);
+        defer tree.deinit();
+
+        if (tree.root) |root|
+            return p.parseTypedInternal(T, root)
+        else
+            // TODO
+            return error.NotYetHandlingEmptyFile;
+    }
+
+    fn parseTypedInternal(p: Self, comptime T: type, value: Value) !T {
+        switch (value) {
+            .String => |str| {
+                switch (@typeInfo(T)) {
+                    .Bool => {
+                        if (std.mem.eql(u8, str, "true") or
+                            std.mem.eql(u8, str, "True") or
+                            std.mem.eql(u8, str, "TRUE"))
+                            return true
+                        else if (std.mem.eql(u8, str, "false") or
+                            std.mem.eql(u8, str, "False") or
+                            std.mem.eql(u8, str, "FALSE"))
+                            return false;
+                    },
+                    .Int, .ComptimeInt => {
+                        return try std.fmt.parseInt(T, str, 0);
+                    },
+                    .Float, .ComptimeFloat => {
+                        return try std.fmt.parseFloat(T, str);
+                    },
+                    else => {},
+                }
+            },
+            else => {},
+        }
+        return error.NotImplemented;
     }
 
     fn readValue(p: Self, allocator: *Allocator, lines: *LinesIter) anyerror!Value {
@@ -1036,6 +1078,30 @@ test "failed parse: multi-line string indent" {
         "Invalid indentation of multi-line string",
         diags.ParseError.message,
     );
+}
+
+test "typed parse: bool" {
+    var p = Parser.init(testing.allocator, .{});
+
+    try testing.expectEqual(true, try p.parseTyped(bool, "> true"));
+    try testing.expectEqual(true, try p.parseTyped(bool, "> True"));
+    try testing.expectEqual(true, try p.parseTyped(bool, "> TRUE"));
+    try testing.expectEqual(false, try p.parseTyped(bool, "> false"));
+    try testing.expectEqual(false, try p.parseTyped(bool, "> False"));
+    try testing.expectEqual(false, try p.parseTyped(bool, "> FALSE"));
+}
+
+test "typed parse: int" {
+    var p = Parser.init(testing.allocator, .{});
+
+    try testing.expectEqual(@as(u1, 1), try p.parseTyped(u1, "> 1"));
+    try testing.expectEqual(@as(u8, 17), try p.parseTyped(u8, "> 0x11"));
+}
+
+test "typed parse: float" {
+    var p = Parser.init(testing.allocator, .{});
+
+    try testing.expectEqual(@as(f64, 1.1), try p.parseTyped(f64, "> 1.1"));
 }
 
 test "stringify: string" {
