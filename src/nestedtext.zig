@@ -562,7 +562,11 @@ pub const Parser = struct {
         }
     }
 
+    /// Releases resources created by 'parseTyped()'.
+    pub fn parseTypedFree(p: Self, comptime T: type, value: T) void {}
+
     fn parseTypedInternal(p: Self, comptime T: type, value: Value) !T {
+        // TODO: Store diags on errors.
         switch (@typeInfo(T)) {
             .Bool => {
                 switch (value) {
@@ -612,6 +616,9 @@ pub const Parser = struct {
             },
             .Enum => |enum_info| {
                 switch (value) {
+                    // Note that if the value is numeric then it could be
+                    // intepreted as the enum number (use std.meta.intToEnum()),
+                    // but we choose not to interpret in this way currently.
                     .String => |str| return try std.meta.stringToEnum(T, str),
                     else => return error.UnexpectedType,
                 }
@@ -621,6 +628,7 @@ pub const Parser = struct {
                 return error.NotImplemented;
             },
             .Struct => |struct_info| {
+                var ret: T = undefined;
                 switch (value) {
                     .Object => |obj| {
                         // TODO
@@ -628,15 +636,34 @@ pub const Parser = struct {
                     },
                     else => return error.UnexpectedType,
                 }
+                return ret;
             },
             .Array => |array_info| {
+                // TODO: Allow array to have spare space, perhaps require terminated?
+                var ret: T = undefined;
                 switch (value) {
                     .List => |list| {
-                        // TODO
-                        return error.NotImplemented;
+                        var idx: usize = 0;
+                        if (list.items.len != ret.len) return error.UnexpectedType;
+                        errdefer {
+                            // Without the len check indexing into the array is not allowed.
+                            if (ret.len > 0) while (true) : (i -= 1) {
+                                p.parseTypedFree(array_info.child, ret[i]);
+                            };
+                        }
+                        // Without the len check indexing into the array is not allowed.
+                        if (ret.len > 0) while (i < ret.len) : (i += 1) {
+                            ret[i] = try p.parseTypedInternal(array_info.child, list[i]);
+                        };
+                    },
+                    .String => |str| {
+                        if (array_info.child != u8) return error.UnexpectedType;
+                        if (str.len != ret.len) return error.UnexpectedType;
+                        std.mem.copy(u8, &ret, str);
                     },
                     else => return error.UnexpectedType,
                 }
+                return ret;
             },
             .Pointer => |ptr_info| {
                 // TODO
@@ -1169,6 +1196,14 @@ test "typed parse: optional" {
     try testing.expectEqual(@as(?[0]u8, null), try p.parseTyped(?[0]u8, "> null"));
     try testing.expectEqual(@as(?bool, null), try p.parseTyped(?bool, "> NULL"));
     try testing.expectEqual(@as(?f64, null), try p.parseTyped(?f64, ">"));
+}
+
+test "typed parse: array" {
+    var p = Parser.init(testing.allocator, .{});
+
+    try testing.expectEqual([0]bool{}, try p.parseTyped([0]bool, "[]"));
+    // try testing.expectEqual([3]i32{1, 2, 3}, try p.parseTyped([3]i32, "[1, 2, 3]"));
+    // try testing.expectEqual("hello", try p.parseTyped([5]u8, "> hello"));
 }
 
 test "stringify: string" {
