@@ -629,13 +629,46 @@ pub const Parser = struct {
             },
             .Struct => |struct_info| {
                 var ret: T = undefined;
+                var obj: Map = undefined;
+                // Check the value type.
                 switch (value) {
-                    .Object => |obj| {
-                        // TODO
-                        return error.NotImplemented;
-                    },
+                    .Object => |_obj| obj = _obj,
                     else => return error.UnexpectedType,
                 }
+                // Keep track of fields seen for error cleanup.
+                var fields_seen = [_]bool{false} ** struct_info.fields.len;
+                errdefer {
+                    inline for (struct_info.fields) |field, i|
+                        if (fields_seen[i] and !field.is_comptime)
+                            p.parseTypedFree(field.field_type, @field(ret, field.name));
+                }
+                // Loop over values in the parsed object.
+                var iter = obj.iterator();
+                while (iter.next()) |entry| {
+                    const key = entry.key_ptr.*;
+                    const val = entry.value_ptr.*;
+                    // TODO
+
+                    inline for (structInfo.fields) |field, i| {
+                        if (field.is_comptime) {
+                            // TODO: ??
+                        } else {
+                            @field(ret, field.name) = try p.parseTypedInternal(field.field_type, val);
+                        }
+                        fields_seen[i] = true;
+                    }
+
+                    return error.NotImplemented;
+                }
+                // Check for missing fields.
+                inline for (struct_info.fields) |field, i| if (!fields_seen[i]) {
+                    if (field.default_value) |default| {
+                        if (!field.is_comptime)
+                            @field(ret, field.name) = default;
+                    } else {
+                        return error.MissingField;
+                    }
+                };
                 return ret;
             },
             .Array => |array_info| {
