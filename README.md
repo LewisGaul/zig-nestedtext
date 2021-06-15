@@ -5,7 +5,7 @@
 [![Gyro badge](https://img.shields.io/badge/gyro-nestedtext-blue)](https://astrolabe.pm/#/tag/nestedtext)
 
 
-A NestedText parser written in Zig 0.8 targeting [NestedText v2.0](https://nestedtext.org/en/v2.0/).
+A NestedText parser written in Zig 0.8 targeting [NestedText v2.0](https://nestedtext.org/en/v2.0/) (note [Deviations From Specification](#deviations-from-specification) below).
 
 See my [Zig NestedText Library blog post](https://www.lewisgaul.co.uk/blog/coding/2021/04/18/zig-nestedtext/).
 
@@ -83,6 +83,37 @@ treasurer:
     phone: 1-268-555-3602
     email: merrill.eldridge@yahoo.com
 ```
+
+
+## Deviations From Specification
+
+The amount of deviation from the official NestedText spec is kept to a minimum, however there is one minor case to be aware of (as reflected in the [fork of the official testsuite](https://github.com/KenKundert/nestedtext_tests/compare/master...LewisGaul:dev) being used to test this project). Where possible these issues are resolved upstream.
+
+Note that this project implements a *strict subset* of the official spec, to avoid compatibility issues.
+
+
+### Empty Values in Flow-style
+
+Empty values are officially allowed in flow-style NestedText, e.g. `{:}` -> `{"":""}`, however this is *disallowed* by this project.
+
+The design choices behind handling for empty values in flow-style are explained in detail at <https://zigforum.org/t/zig-nestedtext-release-0-1-0/383/5>.
+
+This has been discussed with the NestedText creators in GitHub issues ([here](https://github.com/KenKundert/nestedtext/issues/23#issuecomment-831195971) and [here](https://github.com/KenKundert/nestedtext/issues/25#issuecomment-860185422)) and over email, and discussions are ongoing.
+
+To summarise the rationale behind this deviation:
+ - Flow-style is only provided as a shorthand (and a way to represent empty lists/objects), so can be as strict as desired without preventing representation of arbitrary data.
+ - The spec says that `[,]` -> `[""]`, `[,,]` -> `["", ""]` etc., where the trailing comma is required to indicate an empty value at the end of the list.
+ - There is no other use for trailing commas in NestedText since flow-style cannot span multiple lines.
+ - At first glance, `[,]` looks more like a list of *two* empty values than one.
+ - The language states one of its primary goals as being "*easily understood and used by both programmers and non-programmers*".
+ - On balance, the author of this project has decided that the potential confusion from the use of trailing commas to indicate empty values is not worth the convenience it brings to more experienced users.
+
+If you have any thoughts about this either way, please consider posting a comment to <https://github.com/LewisGaul/zig-nestedtext/issues/17>.
+
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 
 ## Development
