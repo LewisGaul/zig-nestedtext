@@ -680,13 +680,13 @@ pub const Parser = struct {
                         if (list.items.len != ret.len) return error.UnexpectedType;
                         errdefer {
                             // Without the len check indexing into the array is not allowed.
-                            if (ret.len > 0) while (true) : (i -= 1) {
-                                p.parseTypedFree(array_info.child, ret[i]);
+                            if (ret.len > 0) while (true) : (idx -= 1) {
+                                p.parseTypedFree(array_info.child, ret[idx]);
                             };
                         }
                         // Without the len check indexing into the array is not allowed.
-                        if (ret.len > 0) while (i < ret.len) : (i += 1) {
-                            ret[i] = try p.parseTypedInternal(array_info.child, list[i]);
+                        if (ret.len > 0) while (idx < ret.len) : (idx += 1) {
+                            ret[idx] = try p.parseTypedInternal(array_info.child, list.items[idx]);
                         };
                     },
                     .String => |str| {
@@ -1234,6 +1234,10 @@ test "typed parse: optional" {
 test "typed parse: array" {
     var p = Parser.init(testing.allocator, .{});
 
+    try testing.expectEqual([0]bool{}, try p.parseTyped([0]bool, "[]"));
+    try testing.expectEqual([3]i32{ 1, 2, 3 }, try p.parseTyped([3]i32, "[1, 2, 3]"));
+    try testing.expectEqualStrings("hello", &(try p.parseTyped([5]u8, "> hello")));
+}
     try testing.expectEqual([0]bool{}, try p.parseTyped([0]bool, "[]"));
     // try testing.expectEqual([3]i32{1, 2, 3}, try p.parseTyped([3]i32, "[1, 2, 3]"));
     // try testing.expectEqual("hello", try p.parseTyped([5]u8, "> hello"));
