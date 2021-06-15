@@ -598,6 +598,20 @@ pub const Parser = struct {
                     else => return error.UnexpectedType,
                 }
             },
+            .Void => {
+                switch (value) {
+                    .String => |str| {
+                        if (std.mem.eql(u8, str, "null") or
+                            std.mem.eql(u8, str, "NULL") or
+                            str.len == 0)
+                        {
+                            return {};
+                        }
+                    },
+                    else => return error.UnexpectedType,
+                }
+                return error.UnexpectedType;
+            },
             .Optional => |optional_info| {
                 switch (value) {
                     .String => |str| {
@@ -624,8 +638,33 @@ pub const Parser = struct {
                 }
             },
             .Union => |union_info| {
-                // TODO
-                return error.NotImplemented;
+                if (union_info.tag_type) |_| {
+                    // Try each of the union fields until we find one with a type
+                    // that the value can successfully be parsed into.
+                    inline for (union_info.fields) |field, i| {
+                        std.debug.print(
+                            "{}/{}\n",
+                            .{ i + 1, union_info.fields.len },
+                        );
+                        std.debug.print(
+                            "{}: {}\n",
+                            .{ field.field_type, @typeInfo(field.field_type) },
+                        );
+                        if (p.parseTypedInternal(field.field_type, value)) |val| {
+                            return @unionInit(T, field.name, val);
+                        } else |err| {
+                            // Bubble up OutOfMemory error.
+                            // Parsing some types won't have OutOfMemory in their
+                            // error-sets - merge it in so that this condition is
+                            // valid.
+                            if (@as(@TypeOf(err) || error{OutOfMemory}, err) == error.OutOfMemory)
+                                return err;
+                        }
+                    }
+                    return error.UnexpectedType;
+                } else {
+                    @compileError("Unable to parse into untagged union '" ++ @typeName(T) ++ "'");
+                }
             },
             .Struct => |struct_info| {
                 var ret: T = undefined;
@@ -1262,6 +1301,22 @@ test "typed parse: struct" {
         MyStruct{ .foo = 123456, .bar = @as(?bool, null) },
         try p.parseTyped(MyStruct, "{foo: 123456, bar: null}"),
     );
+}
+
+test "typed parse: union" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const MyUnion = union(enum) {
+        foo: usize,
+        bar: bool,
+        baz,
+    };
+
+    std.debug.print("\n", .{});
+    try testing.expectEqual(MyUnion{ .foo = 1 }, try p.parseTyped(MyUnion, "> 1"));
+    try testing.expectEqual(MyUnion{ .bar = false }, try p.parseTyped(MyUnion, "> false"));
+    // TODO: Work out what's going on with this failure, see https://github.com/ziglang/zig/issues/9130.
+    try testing.expectEqual(MyUnion.baz, try p.parseTyped(MyUnion, "> null"));
 }
 
 test "stringify: string" {
