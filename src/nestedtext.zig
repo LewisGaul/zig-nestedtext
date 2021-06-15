@@ -647,19 +647,26 @@ pub const Parser = struct {
                 while (iter.next()) |entry| {
                     const key = entry.key_ptr.*;
                     const val = entry.value_ptr.*;
-                    // TODO
+                    var key_field_found = false;
 
-                    inline for (structInfo.fields) |field, i| {
-                        if (field.is_comptime) {
-                            // TODO: ??
-                        } else {
-                            @field(ret, field.name) = try p.parseTypedInternal(field.field_type, val);
+                    // Loop over struct fields, looking for one that matches the current key.
+                    inline for (struct_info.fields) |field, i| {
+                        if (std.mem.eql(u8, field.name, key)) {
+                            if (field.is_comptime) {
+                                // TODO: ??
+                                return error.NotImplemented;
+                            } else {
+                                @field(ret, field.name) = try p.parseTypedInternal(field.field_type, val);
+                            }
+                            fields_seen[i] = true;
+                            key_field_found = true;
+                            break;
                         }
-                        fields_seen[i] = true;
                     }
-
-                    return error.NotImplemented;
+                    // Key found in the data but no corresponding field in the struct.
+                    if (!key_field_found) return error.UnexpectedObjectKey;
                 }
+
                 // Check for missing fields.
                 inline for (struct_info.fields) |field, i| if (!fields_seen[i]) {
                     if (field.default_value) |default| {
@@ -1238,9 +1245,23 @@ test "typed parse: array" {
     try testing.expectEqual([3]i32{ 1, 2, 3 }, try p.parseTyped([3]i32, "[1, 2, 3]"));
     try testing.expectEqualStrings("hello", &(try p.parseTyped([5]u8, "> hello")));
 }
-    try testing.expectEqual([0]bool{}, try p.parseTyped([0]bool, "[]"));
-    // try testing.expectEqual([3]i32{1, 2, 3}, try p.parseTyped([3]i32, "[1, 2, 3]"));
-    // try testing.expectEqual("hello", try p.parseTyped([5]u8, "> hello"));
+
+test "typed parse: struct" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const MyStruct = struct {
+        foo: usize,
+        bar: ?bool,
+    };
+
+    try testing.expectEqual(
+        MyStruct{ .foo = 1, .bar = true },
+        try p.parseTyped(MyStruct, "{foo: 1, bar: TRUE}"),
+    );
+    try testing.expectEqual(
+        MyStruct{ .foo = 123456, .bar = @as(?bool, null) },
+        try p.parseTyped(MyStruct, "{foo: 123456, bar: null}"),
+    );
 }
 
 test "stringify: string" {
