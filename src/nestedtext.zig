@@ -636,7 +636,7 @@ pub const Parser = struct {
                 }
                 return try p.parseTypedInternal(optional_info.child, value);
             },
-            .Enum => |enum_info| {
+            .Enum => |_| {
                 switch (value) {
                     // Note that if the value is numeric then it could be
                     // intepreted as the enum number (use std.meta.intToEnum()),
@@ -649,7 +649,7 @@ pub const Parser = struct {
                 if (union_info.tag_type) |_| {
                     // Try each of the union fields until we find one with a type
                     // that the value can successfully be parsed into.
-                    inline for (union_info.fields) |field, i| {
+                    inline for (union_info.fields) |field| {
                         if (p.parseTypedInternal(field.field_type, value)) |val| {
                             return @unionInit(T, field.name, val);
                         } else |err| {
@@ -1195,7 +1195,7 @@ pub const Parser = struct {
         return map;
     }
 
-    fn parseInlineContainerString(p: Self, text_iter: *CharIter, disallowed_chars: []const u8) ?[]const u8 {
+    fn parseInlineContainerString(_: Self, text_iter: *CharIter, disallowed_chars: []const u8) ?[]const u8 {
         const start_idx = text_iter.idx - 1;
         const end_idx = blk: {
             if (std.mem.indexOfAnyPos(u8, text_iter.text, start_idx, disallowed_chars)) |idx|
