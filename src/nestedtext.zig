@@ -581,7 +581,7 @@ pub const Parser = struct {
                             std.mem.eql(u8, str, "FALSE"))
                         {
                             return false;
-                        }
+                        } else return error.UnexpectedType;
                     },
                     else => return error.UnexpectedType,
                 }
@@ -1315,7 +1315,6 @@ test "typed parse: union" {
     std.debug.print("\n", .{});
     try testing.expectEqual(MyUnion{ .foo = 1 }, try p.parseTyped(MyUnion, "> 1"));
     try testing.expectEqual(MyUnion{ .bar = false }, try p.parseTyped(MyUnion, "> false"));
-    // TODO: Work out what's going on with this failure, see https://github.com/ziglang/zig/issues/9130.
     try testing.expectEqual(MyUnion.baz, try p.parseTyped(MyUnion, "> null"));
 }
 
