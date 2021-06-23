@@ -6,8 +6,8 @@ on:
       - 'tests/**'
       - '**/*.zig'
       - '.github/**'
-  pull_request:
-    branches: [main]
+  schedule:
+    - cron: "0 18 * * *"  # Run at 6pm every day
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -20,7 +20,7 @@ jobs:
       - name: Zig setup
         uses: goto-bus-stop/setup-zig@v1
         with:
-          version: 0.8.0
+          version: master
 
       - name: Run all tests
         run: zig build test
@@ -33,7 +33,7 @@ jobs:
       - name: Setup Zig
         uses: goto-bus-stop/setup-zig@v1
         with:
-          version: 0.8.0
+          version: master
 
       - name: Check formatting
         run: zig fmt --check .
