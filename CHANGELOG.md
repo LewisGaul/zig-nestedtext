@@ -1,9 +1,9 @@
 # Changelog
 
 
-## development (not yet released)
+## v0.3.0 (2021-06-24)
 
-- WIP: Add support for parsing into a comptime type [#15](https://github.com/LewisGaul/zig-nestedtext/pull/15)
+- Add initial support for parsing into a comptime type [#15](https://github.com/LewisGaul/zig-nestedtext/pull/15)
 
 
 ## v0.2.0 (2021-06-06)
