@@ -1,6 +1,6 @@
 pkgs:
   nestedtext:
-    version: 0.2.0
+    version: 0.3.0
     description: "Zig NestedText parser library - a simple human readable data format based on YAML"
     license: MIT
     source_url: "https://github.com/LewisGaul/zig-nestedtext"

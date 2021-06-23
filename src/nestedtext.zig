@@ -51,8 +51,20 @@ pub const ParseError = error{
     DuplicateKey,
 };
 
-const StringifyOptions = struct {
+pub const StringifyOptions = struct {
     indent: usize = 2,
+};
+
+pub const ParseOptions = struct {
+    /// Behaviour when a duplicate field is encountered.
+    duplicate_field_behavior: enum {
+        UseFirst,
+        UseLast,
+        Error,
+    } = .Error,
+
+    /// Whether to copy strings or return existing slices.
+    copy_strings: bool = true,
 };
 
 pub const ValueTree = struct {
@@ -316,22 +328,10 @@ fn fromJsonInternal(allocator: *Allocator, json_value: json.Value) anyerror!Valu
 pub const Parser = struct {
     allocator: *Allocator,
     options: ParseOptions,
-    /// If non-null, this struct is filled in by each call to parse().
+    /// If non-null, this struct is filled in by each call to parse() or parseTyped().
     diags: ?*Diags = null,
 
     const Self = @This();
-
-    pub const ParseOptions = struct {
-        /// Behaviour when a duplicate field is encountered.
-        duplicate_field_behavior: enum {
-            UseFirst,
-            UseLast,
-            Error,
-        } = .Error,
-
-        /// Whether to copy strings or return existing slices.
-        copy_strings: bool = true,
-    };
 
     pub const Diags = union(enum) {
         Empty,
@@ -523,6 +523,7 @@ pub const Parser = struct {
         };
     }
 
+    /// Parse into a tree of 'Value's.
     /// Memory owned by caller on success - free with 'ValueTree.deinit()'.
     pub fn parse(p: Self, input: []const u8) !ValueTree {
         if (p.diags) |diags| diags.* = Diags.Empty;
@@ -545,6 +546,292 @@ pub const Parser = struct {
         } else null;
 
         return tree;
+    }
+
+    /// Parse into a given type.
+    /// Memory owned by caller on success - free with 'Parser.parseTypedFree()'.
+    pub fn parseTyped(p: Self, comptime T: type, input: []const u8) !T {
+        // Note that although parsing into a given type may not need an allocator
+        // (since we use stack memory for non-pointer types), the current
+        // implementation just parses normally for simplicity, and this always
+        // requires an allocator (for non-trivial cases). Hence the allocator
+        // field of the struct is non-optional.
+        var tree = try p.parse(input);
+        defer tree.deinit();
+
+        if (tree.root) |root| {
+            return p.parseTypedInternal(T, root);
+        } else {
+            // TODO
+            return error.NotYetHandlingEmptyFile;
+        }
+    }
+
+    /// Releases resources created by 'parseTyped()'.
+    pub fn parseTypedFree(p: Self, value: anytype) void {
+        const T = @TypeOf(value);
+        p.parseTypedFreeInternal(T, value);
+    }
+
+    fn parseTypedInternal(p: Self, comptime T: type, value: Value) !T {
+        // TODO: Store diags on errors.
+        switch (@typeInfo(T)) {
+            .Bool => {
+                switch (value) {
+                    .String => |str| {
+                        if (std.mem.eql(u8, str, "true") or
+                            std.mem.eql(u8, str, "True") or
+                            std.mem.eql(u8, str, "TRUE"))
+                        {
+                            return true;
+                        } else if (std.mem.eql(u8, str, "false") or
+                            std.mem.eql(u8, str, "False") or
+                            std.mem.eql(u8, str, "FALSE"))
+                        {
+                            return false;
+                        } else return error.UnexpectedType;
+                    },
+                    else => return error.UnexpectedType,
+                }
+            },
+            .Int, .ComptimeInt => {
+                switch (value) {
+                    .String => |str| return try std.fmt.parseInt(T, str, 0),
+                    else => return error.UnexpectedType,
+                }
+            },
+            .Float, .ComptimeFloat => {
+                switch (value) {
+                    .String => |str| return try std.fmt.parseFloat(T, str),
+                    else => return error.UnexpectedType,
+                }
+            },
+            .Void => {
+                switch (value) {
+                    .String => |str| {
+                        if (std.mem.eql(u8, str, "null") or
+                            std.mem.eql(u8, str, "NULL") or
+                            str.len == 0)
+                        {
+                            return {};
+                        }
+                    },
+                    else => return error.UnexpectedType,
+                }
+                return error.UnexpectedType;
+            },
+            .Optional => |optional_info| {
+                switch (value) {
+                    .String => |str| {
+                        if (std.mem.eql(u8, str, "null") or
+                            std.mem.eql(u8, str, "NULL") or
+                            str.len == 0)
+                        {
+                            return null;
+                        }
+                    },
+                    else => {
+                        // Fall through.
+                    },
+                }
+                return try p.parseTypedInternal(optional_info.child, value);
+            },
+            .Enum => |enum_info| {
+                switch (value) {
+                    // Note that if the value is numeric then it could be
+                    // intepreted as the enum number (use std.meta.intToEnum()),
+                    // but we choose not to interpret in this way currently.
+                    .String => |str| return try std.meta.stringToEnum(T, str),
+                    else => return error.UnexpectedType,
+                }
+            },
+            .Union => |union_info| {
+                if (union_info.tag_type) |_| {
+                    // Try each of the union fields until we find one with a type
+                    // that the value can successfully be parsed into.
+                    inline for (union_info.fields) |field, i| {
+                        if (p.parseTypedInternal(field.field_type, value)) |val| {
+                            return @unionInit(T, field.name, val);
+                        } else |err| {
+                            // Bubble up OutOfMemory error.
+                            // Parsing some types won't have OutOfMemory in their
+                            // error-sets - merge it in so that this condition is
+                            // valid.
+                            if (@as(@TypeOf(err) || error{OutOfMemory}, err) == error.OutOfMemory)
+                                return err;
+                        }
+                    }
+                    return error.UnexpectedType;
+                } else {
+                    @compileError("Unable to parse into untagged union '" ++ @typeName(T) ++ "'");
+                }
+            },
+            .Struct => |struct_info| {
+                var ret: T = undefined;
+                var obj: Map = undefined;
+                // Check the value type.
+                switch (value) {
+                    .Object => |_obj| obj = _obj,
+                    else => return error.UnexpectedType,
+                }
+                // Keep track of fields seen for error cleanup.
+                var fields_seen = [_]bool{false} ** struct_info.fields.len;
+                errdefer {
+                    inline for (struct_info.fields) |field, i|
+                        if (fields_seen[i] and !field.is_comptime)
+                            p.parseTypedFreeInternal(field.field_type, @field(ret, field.name));
+                }
+                // Loop over values in the parsed object.
+                var iter = obj.iterator();
+                while (iter.next()) |entry| {
+                    const key = entry.key_ptr.*;
+                    const val = entry.value_ptr.*;
+                    var key_field_found = false;
+
+                    // Loop over struct fields, looking for one that matches the current key.
+                    inline for (struct_info.fields) |field, i| {
+                        if (std.mem.eql(u8, field.name, key)) {
+                            if (field.is_comptime) {
+                                // TODO: ??
+                                return error.NotImplemented;
+                            } else {
+                                @field(ret, field.name) = try p.parseTypedInternal(field.field_type, val);
+                            }
+                            fields_seen[i] = true;
+                            key_field_found = true;
+                            break;
+                        }
+                    }
+                    // Key found in the data but no corresponding field in the struct.
+                    if (!key_field_found) return error.UnexpectedObjectKey;
+                }
+
+                // Check for missing fields.
+                inline for (struct_info.fields) |field, i| if (!fields_seen[i]) {
+                    if (field.default_value) |default| {
+                        if (!field.is_comptime)
+                            @field(ret, field.name) = default;
+                    } else {
+                        return error.MissingField;
+                    }
+                };
+                return ret;
+            },
+            .Array => |array_info| {
+                // TODO: Allow array to have spare space, perhaps require terminated?
+                var ret: T = undefined;
+                switch (value) {
+                    .List => |list| {
+                        var idx: usize = 0;
+                        if (list.items.len != ret.len) return error.UnexpectedType;
+                        errdefer {
+                            // Without the len check indexing into the array is not allowed.
+                            if (ret.len > 0) while (true) : (idx -= 1) {
+                                p.parseTypedFreeInternal(array_info.child, ret[idx]);
+                            };
+                        }
+                        // Without the len check indexing into the array is not allowed.
+                        if (ret.len > 0) while (idx < ret.len) : (idx += 1) {
+                            ret[idx] = try p.parseTypedInternal(array_info.child, list.items[idx]);
+                        };
+                    },
+                    .String => |str| {
+                        if (array_info.child != u8) return error.UnexpectedType;
+                        if (str.len != ret.len) return error.UnexpectedType;
+                        std.mem.copy(u8, &ret, str);
+                    },
+                    else => return error.UnexpectedType,
+                }
+                return ret;
+            },
+            .Pointer => |ptr_info| {
+                switch (ptr_info.size) {
+                    .One => {
+                        const ret: T = try p.allocator.create(ptr_info.child);
+                        errdefer p.allocator.destroy(ret);
+                        ret.* = try p.parseTypedInternal(ptr_info.child, value);
+                        return ret;
+                    },
+                    .Slice => {
+                        switch (value) {
+                            .List => |list| {
+                                var array = ArrayList(ptr_info.child).init(p.allocator);
+                                errdefer {
+                                    var i: usize = array.items.len;
+                                    while (i > 0) : (i -= 1) {
+                                        p.parseTypedFreeInternal(ptr_info.child, array.pop());
+                                    }
+                                    array.deinit();
+                                }
+
+                                try array.ensureTotalCapacity(list.items.len);
+                                for (list.items) |val| {
+                                    array.appendAssumeCapacity(try p.parseTypedInternal(ptr_info.child, val));
+                                }
+                                return array.toOwnedSlice();
+                            },
+                            .String => |str| {
+                                if (ptr_info.child != u8) return error.UnexpectedType;
+                                return p.allocator.dupe(u8, str);
+                            },
+                            else => return error.UnexpectedType,
+                        }
+                    },
+                    else => @compileError("Unable to parse into type '" ++ @typeName(T) ++ "'"),
+                }
+            },
+            else => @compileError("Unable to parse into type '" ++ @typeName(T) ++ "'"),
+        }
+        unreachable;
+    }
+
+    fn parseTypedFreeInternal(p: Self, comptime T: type, value: T) void {
+        switch (@typeInfo(T)) {
+            .Bool, .Float, .ComptimeFloat, .Int, .ComptimeInt, .Enum => {},
+            .Optional => {
+                if (value) |v| {
+                    return p.parseTypedFreeInternal(@TypeOf(v), v);
+                }
+            },
+            .Union => |union_info| {
+                if (union_info.tag_type) |UnionTagType| {
+                    inline for (union_info.fields) |field| {
+                        if (value == @field(UnionTagType, field.name)) {
+                            p.parseTypedFreeInternal(field.field_type, @field(value, field.name));
+                            break;
+                        }
+                    }
+                } else unreachable;
+            },
+            .Struct => |struct_info| {
+                inline for (struct_info.fields) |field| {
+                    if (!field.is_comptime) {
+                        p.parseTypedFreeInternal(field.field_type, @field(value, field.name));
+                    }
+                }
+            },
+            .Array => |array_info| {
+                for (value) |v| {
+                    p.parseTypedFreeInternal(array_info.child, v);
+                }
+            },
+            .Pointer => |ptr_info| {
+                switch (ptr_info.size) {
+                    .One => {
+                        p.parseTypedFreeInternal(ptr_info.child, value.*);
+                        p.allocator.destroy(value);
+                    },
+                    .Slice => {
+                        for (value) |v| {
+                            p.parseTypedFreeInternal(ptr_info.child, v);
+                        }
+                        p.allocator.free(value);
+                    },
+                    else => unreachable,
+                }
+            },
+            else => unreachable,
+        }
     }
 
     fn readValue(p: Self, allocator: *Allocator, lines: *LinesIter) anyerror!Value {
@@ -1036,6 +1323,109 @@ test "failed parse: multi-line string indent" {
         "Invalid indentation of multi-line string",
         diags.ParseError.message,
     );
+}
+
+test "typed parse: bool" {
+    var p = Parser.init(testing.allocator, .{});
+
+    try testing.expectEqual(true, try p.parseTyped(bool, "> true"));
+    try testing.expectEqual(true, try p.parseTyped(bool, "> True"));
+    try testing.expectEqual(true, try p.parseTyped(bool, "> TRUE"));
+    try testing.expectEqual(false, try p.parseTyped(bool, "> false"));
+    try testing.expectEqual(false, try p.parseTyped(bool, "> False"));
+    try testing.expectEqual(false, try p.parseTyped(bool, "> FALSE"));
+}
+
+test "typed parse: int" {
+    var p = Parser.init(testing.allocator, .{});
+
+    try testing.expectEqual(@as(u1, 1), try p.parseTyped(u1, "> 1"));
+    try testing.expectEqual(@as(u8, 17), try p.parseTyped(u8, "> 0x11"));
+}
+
+test "typed parse: float" {
+    var p = Parser.init(testing.allocator, .{});
+
+    try testing.expectEqual(@as(f64, 1.1), try p.parseTyped(f64, "> 1.1"));
+}
+
+test "typed parse: optional" {
+    var p = Parser.init(testing.allocator, .{});
+
+    try testing.expectEqual(@as(?isize, -42), try p.parseTyped(?isize, "> -000_042"));
+    try testing.expectEqual(@as(?[0]u8, null), try p.parseTyped(?[0]u8, "> null"));
+    try testing.expectEqual(@as(?bool, null), try p.parseTyped(?bool, "> NULL"));
+    try testing.expectEqual(@as(?f64, null), try p.parseTyped(?f64, ">"));
+}
+
+test "typed parse: array" {
+    var p = Parser.init(testing.allocator, .{});
+
+    try testing.expectEqual([0]bool{}, try p.parseTyped([0]bool, "[]"));
+    try testing.expectEqual([3]i32{ 1, 2, 3 }, try p.parseTyped([3]i32, "[1, 2, 3]"));
+    try testing.expectEqualStrings("hello", &(try p.parseTyped([5]u8, "> hello")));
+}
+
+test "typed parse: struct" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const MyStruct = struct {
+        foo: usize,
+        bar: ?bool,
+    };
+
+    try testing.expectEqual(
+        MyStruct{ .foo = 1, .bar = true },
+        try p.parseTyped(MyStruct, "{foo: 1, bar: TRUE}"),
+    );
+    try testing.expectEqual(
+        MyStruct{ .foo = 123456, .bar = @as(?bool, null) },
+        try p.parseTyped(MyStruct, "{foo: 123456, bar: null}"),
+    );
+}
+
+test "typed parse: union" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const MyUnion = union(enum) {
+        foo: usize,
+        bar: bool,
+        baz,
+    };
+
+    try testing.expectEqual(MyUnion{ .foo = 1 }, try p.parseTyped(MyUnion, "> 1"));
+    try testing.expectEqual(MyUnion{ .bar = false }, try p.parseTyped(MyUnion, "> false"));
+    try testing.expectEqual(MyUnion.baz, try p.parseTyped(MyUnion, "> null"));
+}
+
+test "typed parse: pointer to single elem" {
+    var p = Parser.init(testing.allocator, .{});
+
+    {
+        const r = try p.parseTyped(*bool, "> false");
+        defer p.parseTypedFree(r);
+        try testing.expectEqual(false, r.*);
+    }
+}
+
+test "typed parse: slice" {
+    var p = Parser.init(testing.allocator, .{});
+
+    {
+        const r = try p.parseTyped([]?bool, "[true, false, null]");
+        defer p.parseTypedFree(r);
+        try testing.expectEqualSlices(?bool, &[_]?bool{ true, false, null }, r);
+    }
+    {
+        const r = try p.parseTyped([]u8, "> foo");
+        defer p.parseTypedFree(r);
+        try testing.expectEqualStrings("foo", r);
+    }
+    {
+        const r = try p.parseTyped([]u8, "[102, 111, 111]");
+        defer p.parseTypedFree(r);
+        try testing.expectEqualStrings("foo", r);
+    }
 }
 
 test "stringify: string" {
