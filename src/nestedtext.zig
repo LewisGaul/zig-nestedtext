@@ -551,6 +551,11 @@ pub const Parser = struct {
     /// Parse into a given type.
     /// Memory owned by caller on success - free with 'Parser.parseTypedFree()'.
     pub fn parseTyped(p: Self, comptime T: type, input: []const u8) !T {
+        // Note that although parsing into a given type may not need an allocator
+        // (since we use stack memory for non-pointer types), the current
+        // implementation just parses normally for simplicity, and this always
+        // requires an allocator (for non-trivial cases). Hence the allocator
+        // field of the struct is non-optional.
         var tree = try p.parse(input);
         defer tree.deinit();
 
@@ -642,14 +647,6 @@ pub const Parser = struct {
                     // Try each of the union fields until we find one with a type
                     // that the value can successfully be parsed into.
                     inline for (union_info.fields) |field, i| {
-                        std.debug.print(
-                            "{}/{}\n",
-                            .{ i + 1, union_info.fields.len },
-                        );
-                        std.debug.print(
-                            "{}: {}\n",
-                            .{ field.field_type, @typeInfo(field.field_type) },
-                        );
                         if (p.parseTypedInternal(field.field_type, value)) |val| {
                             return @unionInit(T, field.name, val);
                         } else |err| {
@@ -1312,7 +1309,6 @@ test "typed parse: union" {
         baz,
     };
 
-    std.debug.print("\n", .{});
     try testing.expectEqual(MyUnion{ .foo = 1 }, try p.parseTyped(MyUnion, "> 1"));
     try testing.expectEqual(MyUnion{ .bar = false }, try p.parseTyped(MyUnion, "> false"));
     try testing.expectEqual(MyUnion.baz, try p.parseTyped(MyUnion, "> null"));
