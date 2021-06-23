@@ -568,7 +568,54 @@ pub const Parser = struct {
     }
 
     /// Releases resources created by 'parseTyped()'.
-    pub fn parseTypedFree(p: Self, comptime T: type, value: T) void {}
+    pub fn parseTypedFree(p: Self, comptime T: type, value: T) void {
+        switch (@typeInfo(T)) {
+            .Bool, .Float, .ComptimeFloat, .Int, .ComptimeInt, .Enum => {},
+            .Optional => {
+                if (value) |v| {
+                    return p.parseTypedFree(@TypeOf(v), v);
+                }
+            },
+            .Union => |union_info| {
+                if (union_info.tag_type) |UnionTagType| {
+                    inline for (union_info.fields) |field| {
+                        if (value == @field(UnionTagType, field.name)) {
+                            p.parseTypedFree(field.field_type, @field(value, field.name));
+                            break;
+                        }
+                    }
+                } else unreachable;
+            },
+            .Struct => |struct_info| {
+                inline for (struct_info.fields) |field| {
+                    if (!field.is_comptime) {
+                        p.parseTypedFree(field.field_type, @field(value, field.name));
+                    }
+                }
+            },
+            .Array => |array_info| {
+                for (value) |v| {
+                    p.parseTypedFree(array_info.child, v);
+                }
+            },
+            .Pointer => |ptr_info| {
+                switch (ptr_info.size) {
+                    .One => {
+                        p.parseTypedFree(ptr_info.child, value.*);
+                        p.allocator.destroy(value);
+                    },
+                    .Slice => {
+                        for (value) |v| {
+                            p.parseTypedFree(ptr_info.child, v);
+                        }
+                        p.allocator.free(value);
+                    },
+                    else => unreachable,
+                }
+            },
+            else => unreachable,
+        }
+    }
 
     fn parseTypedInternal(p: Self, comptime T: type, value: Value) !T {
         // TODO: Store diags on errors.
@@ -742,8 +789,19 @@ pub const Parser = struct {
                 return ret;
             },
             .Pointer => |ptr_info| {
-                // TODO
-                return error.NotImplemented;
+                switch (ptr_info.size) {
+                    .One => {
+                        const ret: T = try p.allocator.create(ptr_info.child);
+                        errdefer p.allocator.destroy(ret);
+                        ret.* = try p.parseTypedInternal(ptr_info.child, value);
+                        return ret;
+                    },
+                    .Slice => {
+                        // TODO
+                        return error.NotImplemented;
+                    },
+                    else => @compileError("Unable to parse into type '" ++ @typeName(T) ++ "'"),
+                }
             },
             else => @compileError("Unable to parse into type '" ++ @typeName(T) ++ "'"),
         }
@@ -1312,6 +1370,15 @@ test "typed parse: union" {
     try testing.expectEqual(MyUnion{ .foo = 1 }, try p.parseTyped(MyUnion, "> 1"));
     try testing.expectEqual(MyUnion{ .bar = false }, try p.parseTyped(MyUnion, "> false"));
     try testing.expectEqual(MyUnion.baz, try p.parseTyped(MyUnion, "> null"));
+}
+
+test "typed parse: pointer single elem" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const result = try p.parseTyped(*bool, "> false");
+    defer p.parseTypedFree(@TypeOf(result), result);
+
+    try testing.expectEqual(false, result.*);
 }
 
 test "stringify: string" {
