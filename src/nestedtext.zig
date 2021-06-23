@@ -568,53 +568,9 @@ pub const Parser = struct {
     }
 
     /// Releases resources created by 'parseTyped()'.
-    pub fn parseTypedFree(p: Self, comptime T: type, value: T) void {
-        switch (@typeInfo(T)) {
-            .Bool, .Float, .ComptimeFloat, .Int, .ComptimeInt, .Enum => {},
-            .Optional => {
-                if (value) |v| {
-                    return p.parseTypedFree(@TypeOf(v), v);
-                }
-            },
-            .Union => |union_info| {
-                if (union_info.tag_type) |UnionTagType| {
-                    inline for (union_info.fields) |field| {
-                        if (value == @field(UnionTagType, field.name)) {
-                            p.parseTypedFree(field.field_type, @field(value, field.name));
-                            break;
-                        }
-                    }
-                } else unreachable;
-            },
-            .Struct => |struct_info| {
-                inline for (struct_info.fields) |field| {
-                    if (!field.is_comptime) {
-                        p.parseTypedFree(field.field_type, @field(value, field.name));
-                    }
-                }
-            },
-            .Array => |array_info| {
-                for (value) |v| {
-                    p.parseTypedFree(array_info.child, v);
-                }
-            },
-            .Pointer => |ptr_info| {
-                switch (ptr_info.size) {
-                    .One => {
-                        p.parseTypedFree(ptr_info.child, value.*);
-                        p.allocator.destroy(value);
-                    },
-                    .Slice => {
-                        for (value) |v| {
-                            p.parseTypedFree(ptr_info.child, v);
-                        }
-                        p.allocator.free(value);
-                    },
-                    else => unreachable,
-                }
-            },
-            else => unreachable,
-        }
+    pub fn parseTypedFree(p: Self, value: anytype) void {
+        const T = @TypeOf(value);
+        p.parseTypedFreeInternal(T, value);
     }
 
     fn parseTypedInternal(p: Self, comptime T: type, value: Value) !T {
@@ -723,7 +679,7 @@ pub const Parser = struct {
                 errdefer {
                     inline for (struct_info.fields) |field, i|
                         if (fields_seen[i] and !field.is_comptime)
-                            p.parseTypedFree(field.field_type, @field(ret, field.name));
+                            p.parseTypedFreeInternal(field.field_type, @field(ret, field.name));
                 }
                 // Loop over values in the parsed object.
                 var iter = obj.iterator();
@@ -771,7 +727,7 @@ pub const Parser = struct {
                         errdefer {
                             // Without the len check indexing into the array is not allowed.
                             if (ret.len > 0) while (true) : (idx -= 1) {
-                                p.parseTypedFree(array_info.child, ret[idx]);
+                                p.parseTypedFreeInternal(array_info.child, ret[idx]);
                             };
                         }
                         // Without the len check indexing into the array is not allowed.
@@ -797,8 +753,29 @@ pub const Parser = struct {
                         return ret;
                     },
                     .Slice => {
-                        // TODO
-                        return error.NotImplemented;
+                        switch (value) {
+                            .List => |list| {
+                                var array = ArrayList(ptr_info.child).init(p.allocator);
+                                errdefer {
+                                    var i: usize = array.items.len;
+                                    while (i > 0) : (i -= 1) {
+                                        p.parseTypedFreeInternal(ptr_info.child, array.pop());
+                                    }
+                                    array.deinit();
+                                }
+
+                                try array.ensureTotalCapacity(list.items.len);
+                                for (list.items) |val| {
+                                    array.appendAssumeCapacity(try p.parseTypedInternal(ptr_info.child, val));
+                                }
+                                return array.toOwnedSlice();
+                            },
+                            .String => |str| {
+                                if (ptr_info.child != u8) return error.UnexpectedType;
+                                return p.allocator.dupe(u8, str);
+                            },
+                            else => return error.UnexpectedType,
+                        }
                     },
                     else => @compileError("Unable to parse into type '" ++ @typeName(T) ++ "'"),
                 }
@@ -806,6 +783,55 @@ pub const Parser = struct {
             else => @compileError("Unable to parse into type '" ++ @typeName(T) ++ "'"),
         }
         unreachable;
+    }
+
+    fn parseTypedFreeInternal(p: Self, comptime T: type, value: T) void {
+        switch (@typeInfo(T)) {
+            .Bool, .Float, .ComptimeFloat, .Int, .ComptimeInt, .Enum => {},
+            .Optional => {
+                if (value) |v| {
+                    return p.parseTypedFreeInternal(@TypeOf(v), v);
+                }
+            },
+            .Union => |union_info| {
+                if (union_info.tag_type) |UnionTagType| {
+                    inline for (union_info.fields) |field| {
+                        if (value == @field(UnionTagType, field.name)) {
+                            p.parseTypedFreeInternal(field.field_type, @field(value, field.name));
+                            break;
+                        }
+                    }
+                } else unreachable;
+            },
+            .Struct => |struct_info| {
+                inline for (struct_info.fields) |field| {
+                    if (!field.is_comptime) {
+                        p.parseTypedFreeInternal(field.field_type, @field(value, field.name));
+                    }
+                }
+            },
+            .Array => |array_info| {
+                for (value) |v| {
+                    p.parseTypedFreeInternal(array_info.child, v);
+                }
+            },
+            .Pointer => |ptr_info| {
+                switch (ptr_info.size) {
+                    .One => {
+                        p.parseTypedFreeInternal(ptr_info.child, value.*);
+                        p.allocator.destroy(value);
+                    },
+                    .Slice => {
+                        for (value) |v| {
+                            p.parseTypedFreeInternal(ptr_info.child, v);
+                        }
+                        p.allocator.free(value);
+                    },
+                    else => unreachable,
+                }
+            },
+            else => unreachable,
+        }
     }
 
     fn readValue(p: Self, allocator: *Allocator, lines: *LinesIter) anyerror!Value {
@@ -1372,13 +1398,34 @@ test "typed parse: union" {
     try testing.expectEqual(MyUnion.baz, try p.parseTyped(MyUnion, "> null"));
 }
 
-test "typed parse: pointer single elem" {
+test "typed parse: pointer to single elem" {
     var p = Parser.init(testing.allocator, .{});
 
-    const result = try p.parseTyped(*bool, "> false");
-    defer p.parseTypedFree(@TypeOf(result), result);
+    {
+        const r = try p.parseTyped(*bool, "> false");
+        defer p.parseTypedFree(r);
+        try testing.expectEqual(false, r.*);
+    }
+}
 
-    try testing.expectEqual(false, result.*);
+test "typed parse: slice" {
+    var p = Parser.init(testing.allocator, .{});
+
+    {
+        const r = try p.parseTyped([]?bool, "[true, false, null]");
+        defer p.parseTypedFree(r);
+        try testing.expectEqualSlices(?bool, &[_]?bool{ true, false, null }, r);
+    }
+    {
+        const r = try p.parseTyped([]u8, "> foo");
+        defer p.parseTypedFree(r);
+        try testing.expectEqualStrings("foo", r);
+    }
+    {
+        const r = try p.parseTyped([]u8, "[102, 111, 111]");
+        defer p.parseTypedFree(r);
+        try testing.expectEqualStrings("foo", r);
+    }
 }
 
 test "stringify: string" {
