@@ -6,8 +6,6 @@ on:
       - 'tests/**'
       - '**/*.zig'
       - '.github/**'
-  schedule:
-    - cron: "0 18 * * *"  # Run at 6pm every day
 jobs:
   test:
     runs-on: ubuntu-latest
