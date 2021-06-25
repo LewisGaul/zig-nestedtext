@@ -1,0 +1,36 @@
+name: Run tests against zig-master branch
+on:
+  schedule:
+    - cron: "0 18 * * *"  # Run at 6pm every day
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@master
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          ref: zig-master
+
+      - name: Zig setup
+        uses: goto-bus-stop/setup-zig@v1
+        with:
+          version: master
+
+      - name: Run all tests
+        run: zig build test
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@master
+        with:
+          ref: zig-master
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v1
+        with:
+          version: master
+
+      - name: Check formatting
+        run: zig fmt --check .
