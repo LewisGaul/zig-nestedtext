@@ -5,9 +5,10 @@ on:
       - 'src/**'
       - 'tests/**'
       - '**/*.zig'
+      - 'deps/**'
       - '.github/**'
   pull_request:
-    branches: [main]
+    branches: [main, zig-master]
 jobs:
   test:
     runs-on: ubuntu-latest
