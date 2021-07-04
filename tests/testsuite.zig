@@ -208,6 +208,7 @@ fn testSingle(allocator: *Allocator, dir: std.fs.Dir) !void {
             try testDumpSuccess(input, expected);
         } else if (try readFileIfExists(dir, allocator, "dump_err.json")) |load_err| {
             // TODO: Should be impossible?
+            _ = load_err;
             logger.warn("Checking dump errors not yet implemented", .{});
         } else {
             logger.err("Expected one of 'dump_out.nt' or 'dump_err.json'", .{});
