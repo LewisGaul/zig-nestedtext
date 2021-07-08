@@ -787,7 +787,6 @@ pub const Parser = struct {
 
     fn parseTypedFreeInternal(p: Self, comptime T: type, value: T) void {
         switch (@typeInfo(T)) {
-            .Bool, .Float, .ComptimeFloat, .Int, .ComptimeInt, .Enum => {},
             .Optional => {
                 if (value) |v| {
                     return p.parseTypedFreeInternal(@TypeOf(v), v);
@@ -830,7 +829,7 @@ pub const Parser = struct {
                     else => unreachable,
                 }
             },
-            else => unreachable,
+            else => {},
         }
     }
 
