@@ -394,7 +394,7 @@ fn fromArbitraryTypeInternal(allocator: *Allocator, value: anytype) anyerror!Val
                 } else {
                     var array = Array.init(allocator);
                     errdefer array.deinit();
-                    for (value) |x, i| {
+                    for (value) |x| {
                         try array.append(try fromArbitraryTypeInternal(allocator, x));
                     }
                     return Value{ .List = array };
