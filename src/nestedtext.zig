@@ -321,6 +321,92 @@ fn fromJsonInternal(allocator: *Allocator, json_value: json.Value) anyerror!Valu
     }
 }
 
+/// Convert an arbitrary type to Nestedtext.
+/// Memory owned by the caller, can be freed with 'ValueTree.deinit()'.'
+pub fn fromArbitraryType(allocator: *Allocator, value: anytype) !ValueTree {
+    var tree: ValueTree = undefined;
+    tree.arena = ArenaAllocator.init(allocator);
+    errdefer tree.deinit();
+    tree.root = try fromArbitraryTypeInternal(&tree.arena.allocator, value);
+    return tree;
+}
+
+fn fromArbitraryTypeInternal(allocator: *Allocator, value: anytype) anyerror!Value {
+    const T = @TypeOf(value);
+    switch (@typeInfo(T)) {
+        .Null, .Void => return Value{ .String = "null" },
+        .Bool => return Value{ .String = if (value) "true" else "false" },
+        .Int, .ComptimeInt, .Float, .ComptimeFloat => {
+            return Value{ .String = try std.fmt.allocPrint(allocator, "{d}", .{value}) };
+        },
+        .Optional => {
+            if (value) |payload| {
+                return fromArbitraryTypeInternal(allocator, payload);
+            } else {
+                return fromArbitraryTypeInternal(allocator, null);
+            }
+        },
+        .Enum, .EnumLiteral => return Value{ .String = @tagName(value) },
+        .ErrorSet => return Value{ .String = @errorName(value) },
+        .Union => |union_info| {
+            // TODO: Could be simplified if
+            //       https://github.com/ziglang/zig/issues/9271 is accepted.
+            if (union_info.tag_type) |UnionTagType| {
+                inline for (union_info.fields) |u_field| {
+                    if (value == @field(UnionTagType, u_field.name)) {
+                        return fromArbitraryTypeInternal(allocator, @field(value, u_field.name));
+                    }
+                }
+            } else {
+                @compileError("Unable to stringify untagged union '" ++ @typeName(T) ++ "'");
+            }
+        },
+        .Struct => |struct_info| {
+            var map = Map.init(allocator);
+            errdefer map.deinit();
+            inline for (struct_info.fields) |Field| {
+                try map.put(
+                    Field.name,
+                    try fromArbitraryTypeInternal(allocator, @field(value, Field.name)),
+                );
+            }
+            return Value{ .Object = map };
+        },
+        .Array => {
+            // Convert to a slice (must be done explicitly since there's no
+            // type signature it can be implicitly cast to match, so by default
+            // you get a single-element pointer).
+            const Slice = []const std.meta.Elem(@TypeOf(&value));
+            return fromArbitraryTypeInternal(allocator, @as(Slice, &value));
+        },
+        .Vector => |vec_info| {
+            const array: [vec_info.len]vec_info.child = value;
+            return fromArbitraryTypeInternal(allocator, &array);
+        },
+        .Pointer => |ptr_info| switch (ptr_info.size) {
+            .One => return fromArbitraryTypeInternal(allocator, value.*),
+            .Slice => {
+                if (ptr_info.child == u8) {
+                    // Always treating this as a string - may want the option to
+                    // treat as an array and handle escapes (see
+                    // std.json.StringifyOptions).
+                    return Value{ .String = allocator.dupe(ptr_info.child) };
+                } else {
+                    var array = Array.init(allocator);
+                    errdefer array.deinit();
+                    for (value) |x, i| {
+                        try array.append(try fromArbitraryTypeInternal(allocator, x));
+                    }
+                    return Value{ .List = array };
+                }
+            },
+            else => @compileError("Unable to stringify type '" ++ @typeName(T) ++ "'"),
+        },
+        else => @compileError("Unable to stringify type '" ++ @typeName(T) ++ "'"),
+    }
+    unreachable;
+}
+
 // -----------------------------------------------------------------------------
 // Parsing logic
 // -----------------------------------------------------------------------------
@@ -641,7 +727,7 @@ pub const Parser = struct {
                     // Note that if the value is numeric then it could be
                     // intepreted as the enum number (use std.meta.intToEnum()),
                     // but we choose not to interpret in this way currently.
-                    .String => |str| return try std.meta.stringToEnum(T, str),
+                    .String => |str| return (std.meta.stringToEnum(T, str) orelse error.InvalidEnumTag),
                     else => return error.UnexpectedType,
                 }
             },
@@ -1383,6 +1469,18 @@ test "typed parse: struct" {
     );
 }
 
+test "typed parse: enum" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const MyEnum = enum {
+        foo,
+        bar,
+    };
+
+    try testing.expectEqual(MyEnum.foo, try p.parseTyped(MyEnum, "> foo"));
+    try testing.expectEqual(MyEnum.bar, try p.parseTyped(MyEnum, "> bar"));
+}
+
 test "typed parse: union" {
     var p = Parser.init(testing.allocator, .{});
 
@@ -1427,6 +1525,23 @@ test "typed parse: slice" {
     }
 }
 
+fn testStringify(expected: []const u8, tree: ValueTree) !void {
+    var buffer: [128]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try tree.stringify(.{}, fbs.writer());
+    try testing.expectEqualStrings(expected, fbs.getWritten());
+}
+
+fn testToJson(expected: []const u8, tree: ValueTree) !void {
+    var json_tree = try tree.toJson(testing.allocator);
+    defer json_tree.deinit();
+
+    var buffer: [128]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try json_tree.root.jsonStringify(.{}, fbs.writer());
+    try testing.expectEqualStrings(expected, fbs.getWritten());
+}
+
 test "stringify: string" {
     var p = Parser.init(testing.allocator, .{});
 
@@ -1438,11 +1553,7 @@ test "stringify: string" {
 
     var tree = try p.parse(s);
     defer tree.deinit();
-
-    var buffer: [128]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
-    try tree.root.?.stringify(.{}, fbs.writer());
-    try testing.expectEqualStrings(s, fbs.getWritten());
+    try testStringify(s, tree);
 }
 
 test "stringify: list" {
@@ -1455,11 +1566,7 @@ test "stringify: list" {
 
     var tree = try p.parse(s);
     defer tree.deinit();
-
-    var buffer: [128]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
-    try tree.root.?.stringify(.{}, fbs.writer());
-    try testing.expectEqualStrings(s, fbs.getWritten());
+    try testStringify(s, tree);
 }
 
 test "stringify: object" {
@@ -1472,11 +1579,7 @@ test "stringify: object" {
 
     var tree = try p.parse(s);
     defer tree.deinit();
-
-    var buffer: [128]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
-    try tree.root.?.stringify(.{}, fbs.writer());
-    try testing.expectEqualStrings(s, fbs.getWritten());
+    try testStringify(s, tree);
 }
 
 test "stringify: multiline string inside object" {
@@ -1491,11 +1594,7 @@ test "stringify: multiline string inside object" {
 
     var tree = try p.parse(s);
     defer tree.deinit();
-
-    var buffer: [128]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
-    try tree.root.?.stringify(.{}, fbs.writer());
-    try testing.expectEqualStrings(s, fbs.getWritten());
+    try testStringify(s, tree);
 }
 
 test "convert to JSON: string" {
@@ -1509,14 +1608,7 @@ test "convert to JSON: string" {
 
     var tree = try p.parse(s);
     defer tree.deinit();
-
-    var json_tree = try tree.root.?.toJson(testing.allocator);
-    defer json_tree.deinit();
-
-    var buffer: [128]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
-    try json_tree.root.jsonStringify(.{}, fbs.writer());
-    try testing.expectEqualStrings("\"this is a\\nmultiline\\nstring\"", fbs.getWritten());
+    try testToJson("\"this is a\\nmultiline\\nstring\"", tree);
 }
 
 test "convert to JSON: list" {
@@ -1529,17 +1621,7 @@ test "convert to JSON: list" {
 
     var tree = try p.parse(s);
     defer tree.deinit();
-
-    var json_tree = try tree.root.?.toJson(testing.allocator);
-    defer json_tree.deinit();
-
-    var buffer: [128]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
-    try json_tree.root.jsonStringify(.{}, fbs.writer());
-    const expected_json =
-        \\["foo","bar"]
-    ;
-    try testing.expectEqualStrings(expected_json, fbs.getWritten());
+    try testToJson("[\"foo\",\"bar\"]", tree);
 }
 
 test "convert to JSON: object" {
@@ -1552,18 +1634,7 @@ test "convert to JSON: object" {
 
     var tree = try p.parse(s);
     defer tree.deinit();
-
-    var json_tree = try tree.root.?.toJson(testing.allocator);
-    defer json_tree.deinit();
-
-    var buffer: [128]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
-    try json_tree.root.jsonStringify(.{}, fbs.writer());
-    // TODO: Order of objects not yet guaranteed.
-    const expected_json =
-        \\{"foo":"1","bar":"False"}
-    ;
-    try testing.expectEqualStrings(expected_json, fbs.getWritten());
+    try testToJson("{\"foo\":\"1\",\"bar\":\"False\"}", tree);
 }
 
 test "convert to JSON: object inside object" {
@@ -1577,17 +1648,7 @@ test "convert to JSON: object inside object" {
 
     var tree = try p.parse(s);
     defer tree.deinit();
-
-    var json_tree = try tree.root.?.toJson(testing.allocator);
-    defer json_tree.deinit();
-
-    var buffer: [128]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
-    try json_tree.root.jsonStringify(.{}, fbs.writer());
-    const expected_json =
-        \\{"bar":{"nest1":"1","nest2":"2"}}
-    ;
-    try testing.expectEqualStrings(expected_json, fbs.getWritten());
+    try testToJson("{\"bar\":{\"nest1\":\"1\",\"nest2\":\"2\"}}", tree);
 }
 
 test "convert to JSON: list inside object" {
@@ -1601,17 +1662,7 @@ test "convert to JSON: list inside object" {
 
     var tree = try p.parse(s);
     defer tree.deinit();
-
-    var json_tree = try tree.root.?.toJson(testing.allocator);
-    defer json_tree.deinit();
-
-    var buffer: [128]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
-    try json_tree.root.jsonStringify(.{}, fbs.writer());
-    const expected_json =
-        \\{"bar":["nest1","nest2"]}
-    ;
-    try testing.expectEqualStrings(expected_json, fbs.getWritten());
+    try testToJson("{\"bar\":[\"nest1\",\"nest2\"]}", tree);
 }
 
 test "convert to JSON: multiline string inside object" {
@@ -1625,17 +1676,7 @@ test "convert to JSON: multiline string inside object" {
 
     var tree = try p.parse(s);
     defer tree.deinit();
-
-    var json_tree = try tree.root.?.toJson(testing.allocator);
-    defer json_tree.deinit();
-
-    var buffer: [128]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
-    try json_tree.root.jsonStringify(.{}, fbs.writer());
-    const expected_json =
-        \\{"foo":"multi\nline"}
-    ;
-    try testing.expectEqualStrings(expected_json, fbs.getWritten());
+    try testToJson("{\"foo\":\"multi\\nline\"}", tree);
 }
 
 test "convert to JSON: multiline string inside list" {
@@ -1650,15 +1691,156 @@ test "convert to JSON: multiline string inside list" {
 
     var tree = try p.parse(s);
     defer tree.deinit();
+    try testToJson("[\"multi\\nline\",\"\"]", tree);
+}
 
-    var json_tree = try tree.root.?.toJson(testing.allocator);
-    defer json_tree.deinit();
+test "from type: bool" {
+    {
+        const tree = try fromArbitraryType(testing.allocator, true);
+        defer tree.deinit();
+        try testStringify("> true", tree);
+    }
+    {
+        const tree = try fromArbitraryType(testing.allocator, false);
+        defer tree.deinit();
+        try testStringify("> false", tree);
+    }
+}
 
-    var buffer: [128]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
-    try json_tree.root.jsonStringify(.{}, fbs.writer());
-    const expected_json =
-        \\["multi\nline",""]
-    ;
-    try testing.expectEqualStrings(expected_json, fbs.getWritten());
+test "from type: number" {
+    {
+        const tree = try fromArbitraryType(testing.allocator, @as(u1, 1));
+        defer tree.deinit();
+        try testStringify("> 1", tree);
+    }
+    {
+        const tree = try fromArbitraryType(testing.allocator, @as(isize, -123456));
+        defer tree.deinit();
+        try testStringify("> -123456", tree);
+    }
+    {
+        const tree = try fromArbitraryType(testing.allocator, @as(f64, 1.1));
+        defer tree.deinit();
+        try testStringify("> 1.1", tree);
+    }
+}
+
+test "from type: optional" {
+    {
+        const tree = try fromArbitraryType(testing.allocator, null);
+        defer tree.deinit();
+        try testStringify("> null", tree);
+    }
+    {
+        const tree = try fromArbitraryType(testing.allocator, @as(?bool, false));
+        defer tree.deinit();
+        try testStringify("> false", tree);
+    }
+}
+
+test "from type: enum" {
+    {
+        const MyEnum = enum {
+            foo,
+            bar,
+        };
+        const tree = try fromArbitraryType(testing.allocator, MyEnum.foo);
+        defer tree.deinit();
+        try testStringify("> foo", tree);
+    }
+    {
+        const tree = try fromArbitraryType(testing.allocator, .enum_literal);
+        defer tree.deinit();
+        try testStringify("> enum_literal", tree);
+    }
+}
+
+test "from type: error" {
+    {
+        const tree = try fromArbitraryType(testing.allocator, error.SomeError);
+        defer tree.deinit();
+        try testStringify("> SomeError", tree);
+    }
+}
+
+test "from type: union" {
+    const MyUnion = union(enum) {
+        foo: usize,
+        bar: bool,
+        baz,
+    };
+
+    {
+        const tree = try fromArbitraryType(testing.allocator, MyUnion{ .foo = 123 });
+        defer tree.deinit();
+        try testStringify("> 123", tree);
+    }
+    {
+        const tree = try fromArbitraryType(testing.allocator, MyUnion{ .bar = true });
+        defer tree.deinit();
+        try testStringify("> true", tree);
+    }
+    {
+        const tree = try fromArbitraryType(testing.allocator, MyUnion{ .baz = {} });
+        defer tree.deinit();
+        try testStringify("> null", tree);
+    }
+    {
+        // Note that without the curly-brace syntax to explicitly pass 'void',
+        // the value is treated as a field of the underlying enum used by the
+        // tagged enum. This is treated differently in the conversion, using
+        // the enum field name rather than the union payload...
+        const tree = try fromArbitraryType(testing.allocator, MyUnion.baz);
+        defer tree.deinit();
+        try testStringify("> baz", tree);
+    }
+}
+
+test "from type: struct" {
+    const MyStruct = struct {
+        foo: usize,
+        bar: ?bool = false,
+        baz: void = {},
+    };
+
+    {
+        const tree = try fromArbitraryType(
+            testing.allocator,
+            MyStruct{ .foo = 1 },
+        );
+        defer tree.deinit();
+        try testToJson("{\"foo\":\"1\",\"bar\":\"false\",\"baz\":\"null\"}", tree);
+    }
+}
+
+test "from type: pointer to single elem" {
+    const value = false;
+    {
+        const tree = try fromArbitraryType(testing.allocator, &value);
+        defer tree.deinit();
+        try testStringify("> false", tree);
+    }
+}
+
+test "from type: array/slice" {
+    const array = [_]i8{ 1, -5, -0, 0123 };
+    const slice: []const i8 = &array;
+    const expected_json = "[\"1\",\"-5\",\"0\",\"123\"]";
+
+    {
+        const tree = try fromArbitraryType(testing.allocator, array);
+        defer tree.deinit();
+        try testToJson(expected_json, tree);
+    }
+    {
+        const tree = try fromArbitraryType(testing.allocator, slice);
+        defer tree.deinit();
+        try testToJson(expected_json, tree);
+    }
+    {
+        // Pointer to array (not a slice).
+        const tree = try fromArbitraryType(testing.allocator, &array);
+        defer tree.deinit();
+        try testToJson(expected_json, tree);
+    }
 }
