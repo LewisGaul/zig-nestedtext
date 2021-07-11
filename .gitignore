@@ -5,3 +5,4 @@ zig-out/
 deps.zig
 .gyro/
 gyro.lock
+kcov-out/

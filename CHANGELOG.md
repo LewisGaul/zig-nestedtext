@@ -1,9 +1,14 @@
 # Changelog
 
 
+## v0.3.2 (2021-07-11)
+
+- Fix compile error in handling of strings in `fromArbitraryType()` [#21](https://github.com/LewisGaul/zig-nestedtext/pull/21)
+
+
 ## v0.3.1 (2021-07-10)
 
-- Add support for converting arbitrary Zig types to NestedText via `fromArbitraryType()` (inverse of `Parser.parseTyped()`)
+- Add support for converting arbitrary Zig types to NestedText via `fromArbitraryType()` (inverse of `Parser.parseTyped()`) [#20](https://github.com/LewisGaul/zig-nestedtext/pull/20)
 - Fix bug in `parseTypedFree()` when passing in a `Void` type
 - Fix bug parsing into enum types with `parseTyped()`
 
