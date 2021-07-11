@@ -1844,3 +1844,26 @@ test "from type: array/slice" {
         try testToJson(expected_json, tree);
     }
 }
+
+test "from type: union with []const u8" {
+    const MyUnion = union(enum) {
+        foo: []const u8,
+        bar,
+    };
+    {
+        const tree = try fromArbitraryType(
+            testing.allocator,
+            MyUnion{ .foo = "baz" },
+        );
+        defer tree.deinit();
+        try testStringify("> baz", tree);
+    }
+    {
+        const tree = try fromArbitraryType(
+            testing.allocator,
+            MyUnion.bar,
+        );
+        defer tree.deinit();
+        try testStringify("> bar", tree);
+    }
+}
