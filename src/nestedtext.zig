@@ -390,7 +390,7 @@ fn fromArbitraryTypeInternal(allocator: *Allocator, value: anytype) anyerror!Val
                     // Always treating this as a string - may want the option to
                     // treat as an array and handle escapes (see
                     // std.json.StringifyOptions).
-                    return Value{ .String = allocator.dupe(ptr_info.child) };
+                    return Value{ .String = try allocator.dupe(u8, value) };
                 } else {
                     var array = Array.init(allocator);
                     errdefer array.deinit();
@@ -1842,5 +1842,13 @@ test "from type: array/slice" {
         const tree = try fromArbitraryType(testing.allocator, &array);
         defer tree.deinit();
         try testToJson(expected_json, tree);
+    }
+}
+
+test "from type: string" {
+    {
+        const tree = try fromArbitraryType(testing.allocator, "hello");
+        defer tree.deinit();
+        try testStringify("> hello", tree);
     }
 }
