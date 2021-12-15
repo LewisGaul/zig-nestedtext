@@ -10,7 +10,7 @@ const WriteError = std.os.WriteError;
 const File = std.fs.File;
 const Allocator = std.mem.Allocator;
 
-var allocator: *Allocator = undefined;
+var allocator: Allocator = undefined;
 
 const logger = std.log.scoped(.cli);
 // pub const log_level = std.log.Level.debug;
@@ -229,7 +229,7 @@ pub fn main() u8 {
     // Use an arena allocator - no need to free memory as we go.
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
-    allocator = &arena.allocator;
+    allocator = arena.allocator();
     const rc = mainWorker() catch 1;
     logger.debug("{d:6} Exiting with: {d}", .{ elapsed(), rc });
     return rc;

@@ -84,7 +84,7 @@ pub const ValueTree = struct {
             try value.stringify(options, out_stream);
     }
 
-    pub fn toJson(self: @This(), allocator: *Allocator) !json.ValueTree {
+    pub fn toJson(self: @This(), allocator: Allocator) !json.ValueTree {
         if (self.root) |value|
             return value.toJson(allocator)
         else
@@ -111,14 +111,14 @@ pub const Value = union(enum) {
         try value.stringifyInternal(options, out_stream, 0, false, false);
     }
 
-    pub fn toJson(value: @This(), allocator: *Allocator) !json.ValueTree {
+    pub fn toJson(value: @This(), allocator: Allocator) !json.ValueTree {
         var json_tree: json.ValueTree = undefined;
         json_tree.arena = ArenaAllocator.init(allocator);
-        json_tree.root = try value.toJsonValue(&json_tree.arena.allocator);
+        json_tree.root = try value.toJsonValue(json_tree.arena.allocator());
         return json_tree;
     }
 
-    fn toJsonValue(value: @This(), allocator: *Allocator) anyerror!json.Value {
+    fn toJsonValue(value: @This(), allocator: Allocator) anyerror!json.Value {
         switch (value) {
             .String => |inner| return json.Value{ .String = inner },
             .List => |inner| {
@@ -267,15 +267,15 @@ pub const Value = union(enum) {
 };
 
 /// Memory owned by caller on success - free with 'ValueTree.deinit()'.
-pub fn fromJson(allocator: *Allocator, json_value: json.Value) !ValueTree {
+pub fn fromJson(allocator: Allocator, json_value: json.Value) !ValueTree {
     var tree: ValueTree = undefined;
     tree.arena = ArenaAllocator.init(allocator);
     errdefer tree.deinit();
-    tree.root = try fromJsonInternal(&tree.arena.allocator, json_value);
+    tree.root = try fromJsonInternal(tree.arena.allocator(), json_value);
     return tree;
 }
 
-fn fromJsonInternal(allocator: *Allocator, json_value: json.Value) anyerror!Value {
+fn fromJsonInternal(allocator: Allocator, json_value: json.Value) anyerror!Value {
     switch (json_value) {
         .Null => return Value{ .String = "null" },
         .Bool => |inner| return Value{ .String = if (inner) "true" else "false" },
@@ -323,15 +323,15 @@ fn fromJsonInternal(allocator: *Allocator, json_value: json.Value) anyerror!Valu
 
 /// Convert an arbitrary type to Nestedtext.
 /// Memory owned by the caller, can be freed with 'ValueTree.deinit()'.'
-pub fn fromArbitraryType(allocator: *Allocator, value: anytype) !ValueTree {
+pub fn fromArbitraryType(allocator: Allocator, value: anytype) !ValueTree {
     var tree: ValueTree = undefined;
     tree.arena = ArenaAllocator.init(allocator);
     errdefer tree.deinit();
-    tree.root = try fromArbitraryTypeInternal(&tree.arena.allocator, value);
+    tree.root = try fromArbitraryTypeInternal(tree.arena.allocator(), value);
     return tree;
 }
 
-fn fromArbitraryTypeInternal(allocator: *Allocator, value: anytype) anyerror!Value {
+fn fromArbitraryTypeInternal(allocator: Allocator, value: anytype) anyerror!Value {
     const T = @TypeOf(value);
     switch (@typeInfo(T)) {
         .Null, .Void => return Value{ .String = "null" },
@@ -412,7 +412,7 @@ fn fromArbitraryTypeInternal(allocator: *Allocator, value: anytype) anyerror!Val
 // -----------------------------------------------------------------------------
 
 pub const Parser = struct {
-    allocator: *Allocator,
+    allocator: Allocator,
     options: ParseOptions,
     /// If non-null, this struct is filled in by each call to parse() or parseTyped().
     diags: ?*Diags = null,
@@ -602,7 +602,7 @@ pub const Parser = struct {
         }
     };
 
-    pub fn init(allocator: *Allocator, options: ParseOptions) Self {
+    pub fn init(allocator: Allocator, options: ParseOptions) Self {
         return .{
             .allocator = allocator,
             .options = options,
@@ -628,7 +628,7 @@ pub const Parser = struct {
                 return ParseError.RootLevelIndent;
             }
             // Recursively parse
-            break :blk try p.readValue(&tree.arena.allocator, &lines);
+            break :blk try p.readValue(tree.arena.allocator(), &lines);
         } else null;
 
         return tree;
@@ -919,7 +919,7 @@ pub const Parser = struct {
         }
     }
 
-    fn readValue(p: Self, allocator: *Allocator, lines: *LinesIter) anyerror!Value {
+    fn readValue(p: Self, allocator: Allocator, lines: *LinesIter) anyerror!Value {
         // Call read<type>() with the first line of the type queued up as the
         // next line in the lines iterator.
         const next_line = lines.peekNext().?;
@@ -943,7 +943,7 @@ pub const Parser = struct {
         };
     }
 
-    fn readString(p: Self, allocator: *Allocator, lines: *LinesIter) ![]const u8 {
+    fn readString(p: Self, allocator: Allocator, lines: *LinesIter) ![]const u8 {
         var buffer = ArrayList(u8).init(allocator);
         errdefer buffer.deinit();
         var writer = buffer.writer();
@@ -975,7 +975,7 @@ pub const Parser = struct {
         return buffer.items;
     }
 
-    fn readList(p: Self, allocator: *Allocator, lines: *LinesIter) !Array {
+    fn readList(p: Self, allocator: Allocator, lines: *LinesIter) !Array {
         var array = Array.init(allocator);
         errdefer array.deinit();
 
@@ -1008,7 +1008,7 @@ pub const Parser = struct {
         return array;
     }
 
-    fn readObject(p: Self, allocator: *Allocator, lines: *LinesIter) anyerror!Map {
+    fn readObject(p: Self, allocator: Allocator, lines: *LinesIter) anyerror!Map {
         var map = Map.init(allocator);
         errdefer map.deinit();
 
@@ -1061,7 +1061,7 @@ pub const Parser = struct {
         return map;
     }
 
-    fn readObjectKey(p: Self, allocator: *Allocator, lines: *LinesIter) ![]const u8 {
+    fn readObjectKey(p: Self, allocator: Allocator, lines: *LinesIter) ![]const u8 {
         // Handled just like strings.
         var buffer = ArrayList(u8).init(allocator);
         errdefer buffer.deinit();
@@ -1094,7 +1094,7 @@ pub const Parser = struct {
         return buffer.items;
     }
 
-    fn readInlineContainer(p: Self, allocator: *Allocator, lines: *LinesIter) !Value {
+    fn readInlineContainer(p: Self, allocator: Allocator, lines: *LinesIter) !Value {
         const line = lines.next().?;
         assert(line.kind == .InlineContainer);
         const line_text = line.kind.InlineContainer.value;
@@ -1119,7 +1119,7 @@ pub const Parser = struct {
         return value;
     }
 
-    fn parseInlineList(p: Self, allocator: *Allocator, text_iter: *CharIter, lineno: usize) anyerror!Array {
+    fn parseInlineList(p: Self, allocator: Allocator, text_iter: *CharIter, lineno: usize) anyerror!Array {
         var array = Array.init(allocator);
         errdefer array.deinit();
 
@@ -1189,7 +1189,7 @@ pub const Parser = struct {
         return array;
     }
 
-    fn parseInlineObject(p: Self, allocator: *Allocator, text_iter: *CharIter, lineno: usize) anyerror!Map {
+    fn parseInlineObject(p: Self, allocator: Allocator, text_iter: *CharIter, lineno: usize) anyerror!Map {
         var map = Map.init(allocator);
         errdefer map.deinit();
 
@@ -1293,7 +1293,7 @@ pub const Parser = struct {
         return std.mem.trim(u8, text_iter.text[start_idx..end_idx], " \t");
     }
 
-    fn maybeDupString(p: Self, allocator: *Allocator, string: []const u8) ![]const u8 {
+    fn maybeDupString(p: Self, allocator: Allocator, string: []const u8) ![]const u8 {
         return if (p.options.copy_strings) try allocator.dupe(u8, string) else string;
     }
 
