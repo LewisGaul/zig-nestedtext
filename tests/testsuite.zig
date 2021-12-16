@@ -97,7 +97,7 @@ fn printLine(line: []const u8) void {
 // -----------------------------------------------------------------------------
 
 /// Returned memory is owned by the caller.
-fn canonicaliseJson(allocator: *Allocator, json_input: []const u8) ![]const u8 {
+fn canonicaliseJson(allocator: Allocator, json_input: []const u8) ![]const u8 {
     var json_tree = try json.Parser.init(allocator, false).parse(json_input);
     defer json_tree.deinit();
     var buffer = std.ArrayList(u8).init(allocator);
@@ -106,7 +106,7 @@ fn canonicaliseJson(allocator: *Allocator, json_input: []const u8) ![]const u8 {
     return buffer.items;
 }
 
-fn readFileIfExists(dir: Dir, allocator: *Allocator, file_path: []const u8) !?[]const u8 {
+fn readFileIfExists(dir: Dir, allocator: Allocator, file_path: []const u8) !?[]const u8 {
     return dir.readFileAlloc(allocator, file_path, max_file_size) catch |e| switch (e) {
         error.FileNotFound => null,
         else => return e,
@@ -182,7 +182,7 @@ fn testDumpSuccess(input_json: []const u8, expected_nt: []const u8) !void {
     try expectEqualStrings(expected_nt, buffer.items);
 }
 
-fn testSingle(allocator: *Allocator, dir: std.fs.Dir) !void {
+fn testSingle(allocator: Allocator, dir: std.fs.Dir) !void {
     var tested_something = false;
 
     if (try readFileIfExists(dir, allocator, "load_in.nt")) |input| {
@@ -243,7 +243,7 @@ fn testAll(base_dir: std.fs.Dir) !void {
         print("--- Running testcase: {s} ---\n", .{entry.name});
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
-        testSingle(&arena.allocator, dir) catch |e| {
+        testSingle(arena.allocator(), dir) catch |e| {
             print("--- Testcase failed: {} ---\n\n", .{e});
             failed += 1;
             try failures.append(entry.name);
