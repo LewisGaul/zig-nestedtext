@@ -5,7 +5,7 @@
 [![Gyro badge](https://img.shields.io/badge/gyro-nestedtext-blue)](https://astrolabe.pm/#/tag/nestedtext)
 
 
-A NestedText parser written in Zig 0.8 targeting [NestedText v2.0](https://nestedtext.org/en/v2.0/) (note [Deviations From Specification](#deviations-from-specification) below).
+A NestedText parser written in Zig 0.9 targeting [NestedText v2.0](https://nestedtext.org/en/v2.0/) (note [Deviations From Specification](#deviations-from-specification) below).
 
 See my [Zig NestedText Library blog post](https://www.lewisgaul.co.uk/blog/coding/2021/04/18/zig-nestedtext/).
 
@@ -17,6 +17,7 @@ There are a few options for making use of this project:
  - Include as a dependency via git submodules
  - Clone and build manually, using a static copy of the built artefacts
  - Use the gyro package manager (untested)
+ - Use the zigmod package manager (untested)
 
 The Zig library has no external dependencies.
 

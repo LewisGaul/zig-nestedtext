@@ -1,6 +1,11 @@
 # Changelog
 
 
+## v0.4.0 (2022-01-03)
+
+- Move to support Zig 0.9, use `zig-0.8` branch for v0.8 support
+
+
 ## v0.3.2 (2021-07-11)
 
 - Fix compile error in handling of strings in `fromArbitraryType()` [#21](https://github.com/LewisGaul/zig-nestedtext/pull/21)
