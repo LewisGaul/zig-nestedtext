@@ -349,16 +349,28 @@ fn fromArbitraryTypeInternal(allocator: Allocator, value: anytype) anyerror!Valu
         .Enum, .EnumLiteral => return Value{ .String = @tagName(value) },
         .ErrorSet => return Value{ .String = @errorName(value) },
         .Union => |union_info| {
-            // TODO: Could be simplified if
-            //       https://github.com/ziglang/zig/issues/9271 is accepted.
-            if (union_info.tag_type) |UnionTagType| {
-                inline for (union_info.fields) |u_field| {
-                    if (value == @field(UnionTagType, u_field.name)) {
-                        return fromArbitraryTypeInternal(allocator, @field(value, u_field.name));
+            if (union_info.tag_type == null) {
+                @compileError("Unable to stringify untagged union '" ++ @typeName(T) ++ "'");
+            }
+            const decl_name = "nestedtext_include_tag";
+            const include_tag: bool = if (@hasDecl(T, decl_name)) @field(T, decl_name) else false;
+            // TODO: Could be simplified when 'inline switch' is implemented?
+            inline for (union_info.fields) |u_field, i| {
+                if (@enumToInt(value) == i) {
+                    const field_name = u_field.name;
+                    const field_value = try fromArbitraryTypeInternal(
+                        allocator,
+                        @field(value, field_name),
+                    );
+                    if (include_tag) {
+                        var map = Map.init(allocator);
+                        errdefer map.deinit();
+                        try map.put(field_name, field_value);
+                        return Value{ .Object = map };
+                    } else {
+                        return field_value;
                     }
                 }
-            } else {
-                @compileError("Unable to stringify untagged union '" ++ @typeName(T) ++ "'");
             }
         },
         .Struct => |struct_info| {
@@ -1793,6 +1805,41 @@ test "from type: union" {
         const tree = try fromArbitraryType(testing.allocator, MyUnion.baz);
         defer tree.deinit();
         try testStringify("> baz", tree);
+    }
+}
+
+test "from type: union, include tag" {
+    const MyUnion = union(enum) {
+        foo: usize,
+        bar: bool,
+        baz,
+
+        pub const nestedtext_include_tag = true;
+    };
+
+    {
+        const tree = try fromArbitraryType(testing.allocator, MyUnion{ .foo = 123 });
+        defer tree.deinit();
+        try testToJson("{\"foo\":\"123\"}", tree);
+    }
+    {
+        const tree = try fromArbitraryType(testing.allocator, MyUnion{ .bar = true });
+        defer tree.deinit();
+        try testToJson("{\"bar\":\"true\"}", tree);
+    }
+    {
+        const tree = try fromArbitraryType(testing.allocator, MyUnion{ .baz = {} });
+        defer tree.deinit();
+        try testToJson("{\"baz\":\"null\"}", tree);
+    }
+    {
+        // Note that without the curly-brace syntax to explicitly pass 'void',
+        // the value is treated as a field of the underlying enum used by the
+        // tagged enum. This is treated differently in the conversion, using
+        // the enum field name rather than the union payload...
+        const tree = try fromArbitraryType(testing.allocator, MyUnion.baz);
+        defer tree.deinit();
+        try testToJson("\"baz\"", tree);
     }
 }
 
