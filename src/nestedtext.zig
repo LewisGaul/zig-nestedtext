@@ -349,16 +349,28 @@ fn fromArbitraryTypeInternal(allocator: Allocator, value: anytype) anyerror!Valu
         .Enum, .EnumLiteral => return Value{ .String = @tagName(value) },
         .ErrorSet => return Value{ .String = @errorName(value) },
         .Union => |union_info| {
-            // TODO: Could be simplified if
-            //       https://github.com/ziglang/zig/issues/9271 is accepted.
-            if (union_info.tag_type) |UnionTagType| {
-                inline for (union_info.fields) |u_field| {
-                    if (value == @field(UnionTagType, u_field.name)) {
-                        return fromArbitraryTypeInternal(allocator, @field(value, u_field.name));
+            if (union_info.tag_type == null) {
+                @compileError("Unable to stringify untagged union '" ++ @typeName(T) ++ "'");
+            }
+            const decl_name = "nestedtext_include_tag";
+            const include_tag: bool = if (@hasDecl(T, decl_name)) @field(T, decl_name) else false;
+            // TODO: Could be simplified when 'inline switch' is implemented?
+            inline for (union_info.fields) |u_field, i| {
+                if (@enumToInt(value) == i) {
+                    const field_name = u_field.name;
+                    const field_value = try fromArbitraryTypeInternal(
+                        allocator,
+                        @field(value, field_name),
+                    );
+                    if (include_tag) {
+                        var map = Map.init(allocator);
+                        errdefer map.deinit();
+                        try map.put(field_name, field_value);
+                        return Value{ .Object = map };
+                    } else {
+                        return field_value;
                     }
                 }
-            } else {
-                @compileError("Unable to stringify untagged union '" ++ @typeName(T) ++ "'");
             }
         },
         .Struct => |struct_info| {
@@ -732,7 +744,32 @@ pub const Parser = struct {
                 }
             },
             .Union => |union_info| {
-                if (union_info.tag_type) |_| {
+                if (union_info.tag_type == null) {
+                    @compileError("Unable to parse into untagged union '" ++ @typeName(T) ++ "'");
+                }
+                const decl_name = "nestedtext_include_tag";
+                const include_tag: bool = if (@hasDecl(T, decl_name)) @field(T, decl_name) else false;
+                if (include_tag) {
+                    var obj: Map = undefined;
+                    // Check the value type.
+                    switch (value) {
+                        .Object => |_obj| obj = _obj,
+                        else => return error.UnexpectedType,
+                    }
+                    if (obj.count() != 1) return error.UnexpectedType;
+                    const obj_entry = obj.pop();
+                    // Search for the union field matching the map key.
+                    inline for (union_info.fields) |field| {
+                        if (std.mem.eql(u8, field.name, obj_entry.key)) {
+                            return @unionInit(
+                                T,
+                                field.name,
+                                try p.parseTypedInternal(field.field_type, obj_entry.value),
+                            );
+                        }
+                    }
+                    return error.UnexpectedType;
+                } else {
                     // Try each of the union fields until we find one with a type
                     // that the value can successfully be parsed into.
                     inline for (union_info.fields) |field| {
@@ -748,8 +785,6 @@ pub const Parser = struct {
                         }
                     }
                     return error.UnexpectedType;
-                } else {
-                    @compileError("Unable to parse into untagged union '" ++ @typeName(T) ++ "'");
                 }
             },
             .Struct => |struct_info| {
@@ -1492,7 +1527,37 @@ test "typed parse: union" {
 
     try testing.expectEqual(MyUnion{ .foo = 1 }, try p.parseTyped(MyUnion, "> 1"));
     try testing.expectEqual(MyUnion{ .bar = false }, try p.parseTyped(MyUnion, "> false"));
-    try testing.expectEqual(MyUnion.baz, try p.parseTyped(MyUnion, "> null"));
+    try testing.expectEqual(MyUnion{ .baz = {} }, try p.parseTyped(MyUnion, "> null"));
+    // TODO:
+    // Note that without the curly-brace syntax to explicitly pass 'void',
+    // the value is treated as a field of the underlying enum used by the
+    // tagged union. This should be made consistent with the reverse (converting
+    // from arbitrary Zig type), so should use the enum field name rather than
+    // the union payload...
+    // try testing.expectEqual(MyUnion.baz, try p.parseTyped(MyUnion, "> baz"));
+}
+
+test "typed parse: union, include tag" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const MyUnion = union(enum) {
+        foo: usize,
+        bar: bool,
+        baz,
+
+        const nestedtext_include_tag = true;
+    };
+
+    try testing.expectEqual(MyUnion{ .foo = 1 }, try p.parseTyped(MyUnion, "foo: 1"));
+    try testing.expectEqual(MyUnion{ .bar = false }, try p.parseTyped(MyUnion, "bar: false"));
+    try testing.expectEqual(MyUnion{ .baz = {} }, try p.parseTyped(MyUnion, "baz: null"));
+    // TODO:
+    // Note that without the curly-brace syntax to explicitly pass 'void',
+    // the value is treated as a field of the underlying enum used by the
+    // tagged union. This should be made consistent with the reverse (converting
+    // from arbitrary Zig type), so should use the enum field name rather than
+    // the union payload...
+    // try testing.expectEqual(MyUnion.baz, try p.parseTyped(MyUnion, "baz"));
 }
 
 test "typed parse: pointer to single elem" {
@@ -1788,7 +1853,42 @@ test "from type: union" {
     {
         // Note that without the curly-brace syntax to explicitly pass 'void',
         // the value is treated as a field of the underlying enum used by the
-        // tagged enum. This is treated differently in the conversion, using
+        // tagged union. This is treated differently in the conversion, using
+        // the enum field name rather than the union payload...
+        const tree = try fromArbitraryType(testing.allocator, MyUnion.baz);
+        defer tree.deinit();
+        try testStringify("> baz", tree);
+    }
+}
+
+test "from type: union, include tag" {
+    const MyUnion = union(enum) {
+        foo: usize,
+        bar: bool,
+        baz,
+
+        const nestedtext_include_tag = true;
+    };
+
+    {
+        const tree = try fromArbitraryType(testing.allocator, MyUnion{ .foo = 123 });
+        defer tree.deinit();
+        try testStringify("foo: 123", tree);
+    }
+    {
+        const tree = try fromArbitraryType(testing.allocator, MyUnion{ .bar = true });
+        defer tree.deinit();
+        try testStringify("bar: true", tree);
+    }
+    {
+        const tree = try fromArbitraryType(testing.allocator, MyUnion{ .baz = {} });
+        defer tree.deinit();
+        try testStringify("baz: null", tree);
+    }
+    {
+        // Note that without the curly-brace syntax to explicitly pass 'void',
+        // the value is treated as a field of the underlying enum used by the
+        // tagged union. This is treated differently in the conversion, using
         // the enum field name rather than the union payload...
         const tree = try fromArbitraryType(testing.allocator, MyUnion.baz);
         defer tree.deinit();
