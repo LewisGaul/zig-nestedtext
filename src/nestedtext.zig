@@ -67,6 +67,11 @@ pub const ParseOptions = struct {
     copy_strings: bool = true,
 };
 
+pub const TypedOptions = struct {
+    /// Whether to treat unions as one-element object with the tag as the key.
+    include_union_tags: bool = false,
+};
+
 pub const ValueTree = struct {
     arena: ArenaAllocator,
     root: ?Value,
@@ -323,15 +328,23 @@ fn fromJsonInternal(allocator: Allocator, json_value: json.Value) anyerror!Value
 
 /// Convert an arbitrary type to Nestedtext.
 /// Memory owned by the caller, can be freed with 'ValueTree.deinit()'.'
-pub fn fromArbitraryType(allocator: Allocator, value: anytype) !ValueTree {
+pub fn fromArbitraryType(
+    allocator: Allocator,
+    value: anytype,
+    options: TypedOptions,
+) !ValueTree {
     var tree: ValueTree = undefined;
     tree.arena = ArenaAllocator.init(allocator);
     errdefer tree.deinit();
-    tree.root = try fromArbitraryTypeInternal(tree.arena.allocator(), value);
+    tree.root = try fromArbitraryTypeInternal(tree.arena.allocator(), value, options);
     return tree;
 }
 
-fn fromArbitraryTypeInternal(allocator: Allocator, value: anytype) anyerror!Value {
+fn fromArbitraryTypeInternal(
+    allocator: Allocator,
+    value: anytype,
+    options: TypedOptions,
+) anyerror!Value {
     const T = @TypeOf(value);
     switch (@typeInfo(T)) {
         .Null, .Void => return Value{ .String = "null" },
@@ -341,9 +354,9 @@ fn fromArbitraryTypeInternal(allocator: Allocator, value: anytype) anyerror!Valu
         },
         .Optional => {
             if (value) |payload| {
-                return fromArbitraryTypeInternal(allocator, payload);
+                return fromArbitraryTypeInternal(allocator, payload, options);
             } else {
-                return fromArbitraryTypeInternal(allocator, null);
+                return fromArbitraryTypeInternal(allocator, null, options);
             }
         },
         .Enum, .EnumLiteral => return Value{ .String = @tagName(value) },
@@ -353,7 +366,10 @@ fn fromArbitraryTypeInternal(allocator: Allocator, value: anytype) anyerror!Valu
                 @compileError("Unable to stringify untagged union '" ++ @typeName(T) ++ "'");
             }
             const decl_name = "nestedtext_include_tag";
-            const include_tag: bool = if (@hasDecl(T, decl_name)) @field(T, decl_name) else false;
+            const include_tag: bool = if (@hasDecl(T, decl_name))
+                @field(T, decl_name)
+            else
+                options.include_union_tags;
             // TODO: Could be simplified when 'inline switch' is implemented?
             inline for (union_info.fields) |u_field, i| {
                 if (@enumToInt(value) == i) {
@@ -361,6 +377,7 @@ fn fromArbitraryTypeInternal(allocator: Allocator, value: anytype) anyerror!Valu
                     const field_value = try fromArbitraryTypeInternal(
                         allocator,
                         @field(value, field_name),
+                        options,
                     );
                     if (include_tag) {
                         var map = Map.init(allocator);
@@ -379,7 +396,11 @@ fn fromArbitraryTypeInternal(allocator: Allocator, value: anytype) anyerror!Valu
             inline for (struct_info.fields) |Field| {
                 try map.put(
                     Field.name,
-                    try fromArbitraryTypeInternal(allocator, @field(value, Field.name)),
+                    try fromArbitraryTypeInternal(
+                        allocator,
+                        @field(value, Field.name),
+                        options,
+                    ),
                 );
             }
             return Value{ .Object = map };
@@ -389,14 +410,18 @@ fn fromArbitraryTypeInternal(allocator: Allocator, value: anytype) anyerror!Valu
             // type signature it can be implicitly cast to match, so by default
             // you get a single-element pointer).
             const Slice = []const std.meta.Elem(@TypeOf(&value));
-            return fromArbitraryTypeInternal(allocator, @as(Slice, &value));
+            return fromArbitraryTypeInternal(
+                allocator,
+                @as(Slice, &value),
+                options,
+            );
         },
         .Vector => |vec_info| {
             const array: [vec_info.len]vec_info.child = value;
-            return fromArbitraryTypeInternal(allocator, &array);
+            return fromArbitraryTypeInternal(allocator, &array, options);
         },
         .Pointer => |ptr_info| switch (ptr_info.size) {
-            .One => return fromArbitraryTypeInternal(allocator, value.*),
+            .One => return fromArbitraryTypeInternal(allocator, value.*, options),
             .Slice => {
                 if (ptr_info.child == u8) {
                     // Always treating this as a string - may want the option to
@@ -407,7 +432,7 @@ fn fromArbitraryTypeInternal(allocator: Allocator, value: anytype) anyerror!Valu
                     var array = Array.init(allocator);
                     errdefer array.deinit();
                     for (value) |x| {
-                        try array.append(try fromArbitraryTypeInternal(allocator, x));
+                        try array.append(try fromArbitraryTypeInternal(allocator, x, options));
                     }
                     return Value{ .List = array };
                 }
@@ -648,7 +673,7 @@ pub const Parser = struct {
 
     /// Parse into a given type.
     /// Memory owned by caller on success - free with 'Parser.parseTypedFree()'.
-    pub fn parseTyped(p: Self, comptime T: type, input: []const u8) !T {
+    pub fn parseTyped(p: Self, comptime T: type, input: []const u8, options: TypedOptions) !T {
         // Note that although parsing into a given type may not need an allocator
         // (since we use stack memory for non-pointer types), the current
         // implementation just parses normally for simplicity, and this always
@@ -658,20 +683,20 @@ pub const Parser = struct {
         defer tree.deinit();
 
         if (tree.root) |root| {
-            return p.parseTypedInternal(T, root);
+            return p.parseTypedInternal(T, root, options);
         } else {
             // TODO
             return error.NotYetHandlingEmptyFile;
         }
     }
 
-    /// Releases resources created by 'parseTyped()'.
-    pub fn parseTypedFree(p: Self, value: anytype) void {
+    /// Releases resources created by 'parseTyped()' (pass the same options).
+    pub fn parseTypedFree(p: Self, value: anytype, options: TypedOptions) void {
         const T = @TypeOf(value);
-        p.parseTypedFreeInternal(T, value);
+        p.parseTypedFreeInternal(T, value, options);
     }
 
-    fn parseTypedInternal(p: Self, comptime T: type, value: Value) !T {
+    fn parseTypedInternal(p: Self, comptime T: type, value: Value, options: TypedOptions) !T {
         // TODO: Store diags on errors.
         switch (@typeInfo(T)) {
             .Bool => {
@@ -732,7 +757,7 @@ pub const Parser = struct {
                         // Fall through.
                     },
                 }
-                return try p.parseTypedInternal(optional_info.child, value);
+                return try p.parseTypedInternal(optional_info.child, value, options);
             },
             .Enum => |_| {
                 switch (value) {
@@ -748,7 +773,10 @@ pub const Parser = struct {
                     @compileError("Unable to parse into untagged union '" ++ @typeName(T) ++ "'");
                 }
                 const decl_name = "nestedtext_include_tag";
-                const include_tag: bool = if (@hasDecl(T, decl_name)) @field(T, decl_name) else false;
+                const include_tag: bool = if (@hasDecl(T, decl_name))
+                    @field(T, decl_name)
+                else
+                    options.include_union_tags;
                 if (include_tag) {
                     var obj: Map = undefined;
                     // Check the value type.
@@ -764,7 +792,11 @@ pub const Parser = struct {
                             return @unionInit(
                                 T,
                                 field.name,
-                                try p.parseTypedInternal(field.field_type, obj_entry.value),
+                                try p.parseTypedInternal(
+                                    field.field_type,
+                                    obj_entry.value,
+                                    options,
+                                ),
                             );
                         }
                     }
@@ -773,7 +805,7 @@ pub const Parser = struct {
                     // Try each of the union fields until we find one with a type
                     // that the value can successfully be parsed into.
                     inline for (union_info.fields) |field| {
-                        if (p.parseTypedInternal(field.field_type, value)) |val| {
+                        if (p.parseTypedInternal(field.field_type, value, options)) |val| {
                             return @unionInit(T, field.name, val);
                         } else |err| {
                             // Bubble up OutOfMemory error.
@@ -800,7 +832,11 @@ pub const Parser = struct {
                 errdefer {
                     inline for (struct_info.fields) |field, i|
                         if (fields_seen[i] and !field.is_comptime)
-                            p.parseTypedFreeInternal(field.field_type, @field(ret, field.name));
+                            p.parseTypedFreeInternal(
+                                field.field_type,
+                                @field(ret, field.name),
+                                options,
+                            );
                 }
                 // Loop over values in the parsed object.
                 var iter = obj.iterator();
@@ -816,7 +852,11 @@ pub const Parser = struct {
                                 // TODO: ??
                                 return error.NotImplemented;
                             } else {
-                                @field(ret, field.name) = try p.parseTypedInternal(field.field_type, val);
+                                @field(ret, field.name) = try p.parseTypedInternal(
+                                    field.field_type,
+                                    val,
+                                    options,
+                                );
                             }
                             fields_seen[i] = true;
                             key_field_found = true;
@@ -848,12 +888,20 @@ pub const Parser = struct {
                         errdefer {
                             // Without the len check indexing into the array is not allowed.
                             if (ret.len > 0) while (true) : (idx -= 1) {
-                                p.parseTypedFreeInternal(array_info.child, ret[idx]);
+                                p.parseTypedFreeInternal(
+                                    array_info.child,
+                                    ret[idx],
+                                    options,
+                                );
                             };
                         }
                         // Without the len check indexing into the array is not allowed.
                         if (ret.len > 0) while (idx < ret.len) : (idx += 1) {
-                            ret[idx] = try p.parseTypedInternal(array_info.child, list.items[idx]);
+                            ret[idx] = try p.parseTypedInternal(
+                                array_info.child,
+                                list.items[idx],
+                                options,
+                            );
                         };
                     },
                     .String => |str| {
@@ -870,7 +918,7 @@ pub const Parser = struct {
                     .One => {
                         const ret: T = try p.allocator.create(ptr_info.child);
                         errdefer p.allocator.destroy(ret);
-                        ret.* = try p.parseTypedInternal(ptr_info.child, value);
+                        ret.* = try p.parseTypedInternal(ptr_info.child, value, options);
                         return ret;
                     },
                     .Slice => {
@@ -880,14 +928,20 @@ pub const Parser = struct {
                                 errdefer {
                                     var i: usize = array.items.len;
                                     while (i > 0) : (i -= 1) {
-                                        p.parseTypedFreeInternal(ptr_info.child, array.pop());
+                                        p.parseTypedFreeInternal(
+                                            ptr_info.child,
+                                            array.pop(),
+                                            options,
+                                        );
                                     }
                                     array.deinit();
                                 }
 
                                 try array.ensureTotalCapacity(list.items.len);
                                 for (list.items) |val| {
-                                    array.appendAssumeCapacity(try p.parseTypedInternal(ptr_info.child, val));
+                                    array.appendAssumeCapacity(
+                                        try p.parseTypedInternal(ptr_info.child, val, options),
+                                    );
                                 }
                                 return array.toOwnedSlice();
                             },
@@ -906,18 +960,23 @@ pub const Parser = struct {
         unreachable;
     }
 
-    fn parseTypedFreeInternal(p: Self, comptime T: type, value: T) void {
+    fn parseTypedFreeInternal(p: Self, comptime T: type, value: T, options: TypedOptions) void {
+        _ = options;
         switch (@typeInfo(T)) {
             .Optional => {
                 if (value) |v| {
-                    return p.parseTypedFreeInternal(@TypeOf(v), v);
+                    return p.parseTypedFreeInternal(@TypeOf(v), v, options);
                 }
             },
             .Union => |union_info| {
                 if (union_info.tag_type) |UnionTagType| {
                     inline for (union_info.fields) |field| {
                         if (value == @field(UnionTagType, field.name)) {
-                            p.parseTypedFreeInternal(field.field_type, @field(value, field.name));
+                            p.parseTypedFreeInternal(
+                                field.field_type,
+                                @field(value, field.name),
+                                options,
+                            );
                             break;
                         }
                     }
@@ -926,24 +985,28 @@ pub const Parser = struct {
             .Struct => |struct_info| {
                 inline for (struct_info.fields) |field| {
                     if (!field.is_comptime) {
-                        p.parseTypedFreeInternal(field.field_type, @field(value, field.name));
+                        p.parseTypedFreeInternal(
+                            field.field_type,
+                            @field(value, field.name),
+                            options,
+                        );
                     }
                 }
             },
             .Array => |array_info| {
                 for (value) |v| {
-                    p.parseTypedFreeInternal(array_info.child, v);
+                    p.parseTypedFreeInternal(array_info.child, v, options);
                 }
             },
             .Pointer => |ptr_info| {
                 switch (ptr_info.size) {
                     .One => {
-                        p.parseTypedFreeInternal(ptr_info.child, value.*);
+                        p.parseTypedFreeInternal(ptr_info.child, value.*, options);
                         p.allocator.destroy(value);
                     },
                     .Slice => {
                         for (value) |v| {
-                            p.parseTypedFreeInternal(ptr_info.child, v);
+                            p.parseTypedFreeInternal(ptr_info.child, v, options);
                         }
                         p.allocator.free(value);
                     },
@@ -1448,42 +1511,42 @@ test "failed parse: multi-line string indent" {
 test "typed parse: bool" {
     var p = Parser.init(testing.allocator, .{});
 
-    try testing.expectEqual(true, try p.parseTyped(bool, "> true"));
-    try testing.expectEqual(true, try p.parseTyped(bool, "> True"));
-    try testing.expectEqual(true, try p.parseTyped(bool, "> TRUE"));
-    try testing.expectEqual(false, try p.parseTyped(bool, "> false"));
-    try testing.expectEqual(false, try p.parseTyped(bool, "> False"));
-    try testing.expectEqual(false, try p.parseTyped(bool, "> FALSE"));
+    try testing.expectEqual(true, try p.parseTyped(bool, "> true", .{}));
+    try testing.expectEqual(true, try p.parseTyped(bool, "> True", .{}));
+    try testing.expectEqual(true, try p.parseTyped(bool, "> TRUE", .{}));
+    try testing.expectEqual(false, try p.parseTyped(bool, "> false", .{}));
+    try testing.expectEqual(false, try p.parseTyped(bool, "> False", .{}));
+    try testing.expectEqual(false, try p.parseTyped(bool, "> FALSE", .{}));
 }
 
 test "typed parse: int" {
     var p = Parser.init(testing.allocator, .{});
 
-    try testing.expectEqual(@as(u1, 1), try p.parseTyped(u1, "> 1"));
-    try testing.expectEqual(@as(u8, 17), try p.parseTyped(u8, "> 0x11"));
+    try testing.expectEqual(@as(u1, 1), try p.parseTyped(u1, "> 1", .{}));
+    try testing.expectEqual(@as(u8, 17), try p.parseTyped(u8, "> 0x11", .{}));
 }
 
 test "typed parse: float" {
     var p = Parser.init(testing.allocator, .{});
 
-    try testing.expectEqual(@as(f64, 1.1), try p.parseTyped(f64, "> 1.1"));
+    try testing.expectEqual(@as(f64, 1.1), try p.parseTyped(f64, "> 1.1", .{}));
 }
 
 test "typed parse: optional" {
     var p = Parser.init(testing.allocator, .{});
 
-    try testing.expectEqual(@as(?isize, -42), try p.parseTyped(?isize, "> -000_042"));
-    try testing.expectEqual(@as(?[0]u8, null), try p.parseTyped(?[0]u8, "> null"));
-    try testing.expectEqual(@as(?bool, null), try p.parseTyped(?bool, "> NULL"));
-    try testing.expectEqual(@as(?f64, null), try p.parseTyped(?f64, ">"));
+    try testing.expectEqual(@as(?isize, -42), try p.parseTyped(?isize, "> -000_042", .{}));
+    try testing.expectEqual(@as(?[0]u8, null), try p.parseTyped(?[0]u8, "> null", .{}));
+    try testing.expectEqual(@as(?bool, null), try p.parseTyped(?bool, "> NULL", .{}));
+    try testing.expectEqual(@as(?f64, null), try p.parseTyped(?f64, ">", .{}));
 }
 
 test "typed parse: array" {
     var p = Parser.init(testing.allocator, .{});
 
-    try testing.expectEqual([0]bool{}, try p.parseTyped([0]bool, "[]"));
-    try testing.expectEqual([3]i32{ 1, 2, 3 }, try p.parseTyped([3]i32, "[1, 2, 3]"));
-    try testing.expectEqualStrings("hello", &(try p.parseTyped([5]u8, "> hello")));
+    try testing.expectEqual([0]bool{}, try p.parseTyped([0]bool, "[]", .{}));
+    try testing.expectEqual([3]i32{ 1, 2, 3 }, try p.parseTyped([3]i32, "[1, 2, 3]", .{}));
+    try testing.expectEqualStrings("hello", &(try p.parseTyped([5]u8, "> hello", .{})));
 }
 
 test "typed parse: struct" {
@@ -1496,11 +1559,11 @@ test "typed parse: struct" {
 
     try testing.expectEqual(
         MyStruct{ .foo = 1, .bar = true },
-        try p.parseTyped(MyStruct, "{foo: 1, bar: TRUE}"),
+        try p.parseTyped(MyStruct, "{foo: 1, bar: TRUE}", .{}),
     );
     try testing.expectEqual(
         MyStruct{ .foo = 123456, .bar = @as(?bool, null) },
-        try p.parseTyped(MyStruct, "{foo: 123456, bar: null}"),
+        try p.parseTyped(MyStruct, "{foo: 123456, bar: null}", .{}),
     );
 }
 
@@ -1512,35 +1575,76 @@ test "typed parse: enum" {
         bar,
     };
 
-    try testing.expectEqual(MyEnum.foo, try p.parseTyped(MyEnum, "> foo"));
-    try testing.expectEqual(MyEnum.bar, try p.parseTyped(MyEnum, "> bar"));
+    try testing.expectEqual(MyEnum.foo, try p.parseTyped(MyEnum, "> foo", .{}));
+    try testing.expectEqual(MyEnum.bar, try p.parseTyped(MyEnum, "> bar", .{}));
 }
 
-test "typed parse: union" {
+test "typed parse: union, no tags" {
     var p = Parser.init(testing.allocator, .{});
 
-    const MyUnion = union(enum) {
+    const PlainUnion = union(enum) {
         foo: usize,
         bar: bool,
         baz,
     };
 
-    try testing.expectEqual(MyUnion{ .foo = 1 }, try p.parseTyped(MyUnion, "> 1"));
-    try testing.expectEqual(MyUnion{ .bar = false }, try p.parseTyped(MyUnion, "> false"));
-    try testing.expectEqual(MyUnion{ .baz = {} }, try p.parseTyped(MyUnion, "> null"));
+    const AttrUnion = union(enum) {
+        foo: usize,
+        bar: bool,
+        baz,
+
+        const nestedtext_include_tag = false;
+    };
+
+    const include_tag_opts = TypedOptions{ .include_union_tags = true };
+
+    try testing.expectEqual(
+        PlainUnion{ .foo = 1 },
+        try p.parseTyped(PlainUnion, "> 1", .{}),
+    );
+    try testing.expectEqual(
+        PlainUnion{ .bar = false },
+        try p.parseTyped(PlainUnion, "> false", .{}),
+    );
+    try testing.expectEqual(
+        PlainUnion{ .baz = {} },
+        try p.parseTyped(PlainUnion, "> null", .{}),
+    );
     // TODO:
     // Note that without the curly-brace syntax to explicitly pass 'void',
     // the value is treated as a field of the underlying enum used by the
     // tagged union. This should be made consistent with the reverse (converting
     // from arbitrary Zig type), so should use the enum field name rather than
     // the union payload...
-    // try testing.expectEqual(MyUnion.baz, try p.parseTyped(MyUnion, "> baz"));
+    // try testing.expectEqual(
+    //     PlainUnion.baz,
+    //     try p.parseTyped(PlainUnion, "> baz", .{}),
+    // );
+
+    try testing.expectEqual(
+        AttrUnion{ .foo = 1 },
+        try p.parseTyped(AttrUnion, "> 1", include_tag_opts),
+    );
+    try testing.expectEqual(
+        AttrUnion{ .bar = false },
+        try p.parseTyped(AttrUnion, "> false", include_tag_opts),
+    );
+    try testing.expectEqual(
+        AttrUnion{ .baz = {} },
+        try p.parseTyped(AttrUnion, "> null", include_tag_opts),
+    );
 }
 
-test "typed parse: union, include tag" {
+test "typed parse: union, include tags" {
     var p = Parser.init(testing.allocator, .{});
 
-    const MyUnion = union(enum) {
+    const PlainUnion = union(enum) {
+        foo: usize,
+        bar: bool,
+        baz,
+    };
+
+    const AttrUnion = union(enum) {
         foo: usize,
         bar: bool,
         baz,
@@ -1548,24 +1652,84 @@ test "typed parse: union, include tag" {
         const nestedtext_include_tag = true;
     };
 
-    try testing.expectEqual(MyUnion{ .foo = 1 }, try p.parseTyped(MyUnion, "foo: 1"));
-    try testing.expectEqual(MyUnion{ .bar = false }, try p.parseTyped(MyUnion, "bar: false"));
-    try testing.expectEqual(MyUnion{ .baz = {} }, try p.parseTyped(MyUnion, "baz: null"));
+    const include_tag_opts = TypedOptions{ .include_union_tags = true };
+
+    try testing.expectEqual(
+        PlainUnion{ .foo = 1 },
+        try p.parseTyped(PlainUnion, "foo: 1", include_tag_opts),
+    );
+    try testing.expectEqual(
+        PlainUnion{ .bar = false },
+        try p.parseTyped(PlainUnion, "bar: false", include_tag_opts),
+    );
+    try testing.expectEqual(
+        PlainUnion{ .baz = {} },
+        try p.parseTyped(PlainUnion, "baz: null", include_tag_opts),
+    );
     // TODO:
     // Note that without the curly-brace syntax to explicitly pass 'void',
     // the value is treated as a field of the underlying enum used by the
     // tagged union. This should be made consistent with the reverse (converting
     // from arbitrary Zig type), so should use the enum field name rather than
     // the union payload...
-    // try testing.expectEqual(MyUnion.baz, try p.parseTyped(MyUnion, "baz"));
+    // try testing.expectEqual(
+    //     PlainUnion.baz,
+    //     try p.parseTyped(PlainUnion, "baz", include_tag_opts),
+    // );
+
+    try testing.expectEqual(
+        AttrUnion{ .foo = 1 },
+        try p.parseTyped(AttrUnion, "foo: 1", .{}),
+    );
+    try testing.expectEqual(
+        AttrUnion{ .bar = false },
+        try p.parseTyped(AttrUnion, "bar: false", .{}),
+    );
+    try testing.expectEqual(
+        AttrUnion{ .baz = {} },
+        try p.parseTyped(AttrUnion, "baz: null", .{}),
+    );
+}
+
+test "typed parse: union, with and without tags" {
+    var p = Parser.init(testing.allocator, .{});
+
+    const PlainUnion = union(enum) {
+        foo: usize,
+        bar: bool,
+        baz,
+    };
+
+    const AttrUnion = union(enum) {
+        x: PlainUnion,
+        y: PlainUnion,
+
+        const nestedtext_include_tag = true;
+    };
+
+    const no_include_tag_opts = TypedOptions{ .include_union_tags = false };
+    const include_tag_opts = TypedOptions{ .include_union_tags = true };
+
+    try testing.expectEqual(
+        AttrUnion{ .x = PlainUnion{ .foo = 1 } },
+        try p.parseTyped(AttrUnion, "x: 1", no_include_tag_opts),
+    );
+    try testing.expectEqual(
+        AttrUnion{ .y = PlainUnion{ .bar = true } },
+        try p.parseTyped(AttrUnion, "y: true", no_include_tag_opts),
+    );
+    try testing.expectEqual(
+        AttrUnion{ .y = PlainUnion{ .bar = true } },
+        try p.parseTyped(AttrUnion, "y:\n  bar: true", include_tag_opts),
+    );
 }
 
 test "typed parse: pointer to single elem" {
     var p = Parser.init(testing.allocator, .{});
 
     {
-        const r = try p.parseTyped(*bool, "> false");
-        defer p.parseTypedFree(r);
+        const r = try p.parseTyped(*bool, "> false", .{});
+        defer p.parseTypedFree(r, .{});
         try testing.expectEqual(false, r.*);
     }
 }
@@ -1574,18 +1738,18 @@ test "typed parse: slice" {
     var p = Parser.init(testing.allocator, .{});
 
     {
-        const r = try p.parseTyped([]?bool, "[true, false, null]");
-        defer p.parseTypedFree(r);
+        const r = try p.parseTyped([]?bool, "[true, false, null]", .{});
+        defer p.parseTypedFree(r, .{});
         try testing.expectEqualSlices(?bool, &[_]?bool{ true, false, null }, r);
     }
     {
-        const r = try p.parseTyped([]u8, "> foo");
-        defer p.parseTypedFree(r);
+        const r = try p.parseTyped([]u8, "> foo", .{});
+        defer p.parseTypedFree(r, .{});
         try testing.expectEqualStrings("foo", r);
     }
     {
-        const r = try p.parseTyped([]u8, "[102, 111, 111]");
-        defer p.parseTypedFree(r);
+        const r = try p.parseTyped([]u8, "[102, 111, 111]", .{});
+        defer p.parseTypedFree(r, .{});
         try testing.expectEqualStrings("foo", r);
     }
 }
@@ -1761,12 +1925,12 @@ test "convert to JSON: multiline string inside list" {
 
 test "from type: bool" {
     {
-        const tree = try fromArbitraryType(testing.allocator, true);
+        const tree = try fromArbitraryType(testing.allocator, true, .{});
         defer tree.deinit();
         try testStringify("> true", tree);
     }
     {
-        const tree = try fromArbitraryType(testing.allocator, false);
+        const tree = try fromArbitraryType(testing.allocator, false, .{});
         defer tree.deinit();
         try testStringify("> false", tree);
     }
@@ -1774,17 +1938,17 @@ test "from type: bool" {
 
 test "from type: number" {
     {
-        const tree = try fromArbitraryType(testing.allocator, @as(u1, 1));
+        const tree = try fromArbitraryType(testing.allocator, @as(u1, 1), .{});
         defer tree.deinit();
         try testStringify("> 1", tree);
     }
     {
-        const tree = try fromArbitraryType(testing.allocator, @as(isize, -123456));
+        const tree = try fromArbitraryType(testing.allocator, @as(isize, -123456), .{});
         defer tree.deinit();
         try testStringify("> -123456", tree);
     }
     {
-        const tree = try fromArbitraryType(testing.allocator, @as(f64, 1.1));
+        const tree = try fromArbitraryType(testing.allocator, @as(f64, 1.1), .{});
         defer tree.deinit();
         try testStringify("> 1.1", tree);
     }
@@ -1792,12 +1956,12 @@ test "from type: number" {
 
 test "from type: optional" {
     {
-        const tree = try fromArbitraryType(testing.allocator, null);
+        const tree = try fromArbitraryType(testing.allocator, null, .{});
         defer tree.deinit();
         try testStringify("> null", tree);
     }
     {
-        const tree = try fromArbitraryType(testing.allocator, @as(?bool, false));
+        const tree = try fromArbitraryType(testing.allocator, @as(?bool, false), .{});
         defer tree.deinit();
         try testStringify("> false", tree);
     }
@@ -1809,12 +1973,12 @@ test "from type: enum" {
             foo,
             bar,
         };
-        const tree = try fromArbitraryType(testing.allocator, MyEnum.foo);
+        const tree = try fromArbitraryType(testing.allocator, MyEnum.foo, .{});
         defer tree.deinit();
         try testStringify("> foo", tree);
     }
     {
-        const tree = try fromArbitraryType(testing.allocator, .enum_literal);
+        const tree = try fromArbitraryType(testing.allocator, .enum_literal, .{});
         defer tree.deinit();
         try testStringify("> enum_literal", tree);
     }
@@ -1822,31 +1986,31 @@ test "from type: enum" {
 
 test "from type: error" {
     {
-        const tree = try fromArbitraryType(testing.allocator, error.SomeError);
+        const tree = try fromArbitraryType(testing.allocator, error.SomeError, .{});
         defer tree.deinit();
         try testStringify("> SomeError", tree);
     }
 }
 
-test "from type: union" {
-    const MyUnion = union(enum) {
+test "from type: union, no tags" {
+    const PlainUnion = union(enum) {
         foo: usize,
         bar: bool,
         baz,
     };
 
     {
-        const tree = try fromArbitraryType(testing.allocator, MyUnion{ .foo = 123 });
+        const tree = try fromArbitraryType(testing.allocator, PlainUnion{ .foo = 123 }, .{});
         defer tree.deinit();
         try testStringify("> 123", tree);
     }
     {
-        const tree = try fromArbitraryType(testing.allocator, MyUnion{ .bar = true });
+        const tree = try fromArbitraryType(testing.allocator, PlainUnion{ .bar = true }, .{});
         defer tree.deinit();
         try testStringify("> true", tree);
     }
     {
-        const tree = try fromArbitraryType(testing.allocator, MyUnion{ .baz = {} });
+        const tree = try fromArbitraryType(testing.allocator, PlainUnion{ .baz = {} }, .{});
         defer tree.deinit();
         try testStringify("> null", tree);
     }
@@ -1855,33 +2019,63 @@ test "from type: union" {
         // the value is treated as a field of the underlying enum used by the
         // tagged union. This is treated differently in the conversion, using
         // the enum field name rather than the union payload...
-        const tree = try fromArbitraryType(testing.allocator, MyUnion.baz);
+        const tree = try fromArbitraryType(testing.allocator, PlainUnion.baz, .{});
         defer tree.deinit();
         try testStringify("> baz", tree);
     }
-}
 
-test "from type: union, include tag" {
-    const MyUnion = union(enum) {
+    const AttrUnion = union(enum) {
         foo: usize,
         bar: bool,
         baz,
 
-        const nestedtext_include_tag = true;
+        const nestedtext_include_tag = false;
+    };
+
+    const include_tag_opts = TypedOptions{ .include_union_tags = true };
+
+    {
+        const tree = try fromArbitraryType(
+            testing.allocator,
+            AttrUnion{ .foo = 123 },
+            include_tag_opts,
+        );
+        defer tree.deinit();
+        try testStringify("> 123", tree);
+    }
+}
+
+test "from type: union, include tags" {
+    const PlainUnion = union(enum) {
+        foo: usize,
+        bar: bool,
+        baz,
     };
 
     {
-        const tree = try fromArbitraryType(testing.allocator, MyUnion{ .foo = 123 });
+        const tree = try fromArbitraryType(
+            testing.allocator,
+            PlainUnion{ .foo = 123 },
+            .{ .include_union_tags = true },
+        );
         defer tree.deinit();
         try testStringify("foo: 123", tree);
     }
     {
-        const tree = try fromArbitraryType(testing.allocator, MyUnion{ .bar = true });
+        const tree = try fromArbitraryType(
+            testing.allocator,
+            PlainUnion{ .bar = true },
+            .{ .include_union_tags = true },
+        );
         defer tree.deinit();
         try testStringify("bar: true", tree);
     }
     {
-        const tree = try fromArbitraryType(testing.allocator, MyUnion{ .baz = {} });
+        const tree = try fromArbitraryType(
+            testing.allocator,
+            PlainUnion{ .baz = {} },
+            .{ .include_union_tags = true },
+        );
         defer tree.deinit();
         try testStringify("baz: null", tree);
     }
@@ -1890,9 +2084,70 @@ test "from type: union, include tag" {
         // the value is treated as a field of the underlying enum used by the
         // tagged union. This is treated differently in the conversion, using
         // the enum field name rather than the union payload...
-        const tree = try fromArbitraryType(testing.allocator, MyUnion.baz);
+        const tree = try fromArbitraryType(
+            testing.allocator,
+            PlainUnion.baz,
+            .{ .include_union_tags = true },
+        );
         defer tree.deinit();
         try testStringify("> baz", tree);
+    }
+
+    const AttrUnion = union(enum) {
+        foo: usize,
+        bar: bool,
+        baz,
+
+        const nestedtext_include_tag = true;
+    };
+
+    {
+        const tree = try fromArbitraryType(testing.allocator, AttrUnion{ .foo = 123 }, .{});
+        defer tree.deinit();
+        try testStringify("foo: 123", tree);
+    }
+}
+
+test "from type: union, with and without tags" {
+    const PlainUnion = union(enum) {
+        foo: usize,
+        bar: bool,
+        baz,
+    };
+
+    const AttrUnion = union(enum) {
+        x: PlainUnion,
+        y: PlainUnion,
+
+        const nestedtext_include_tag = true;
+    };
+
+    {
+        const tree = try fromArbitraryType(
+            testing.allocator,
+            AttrUnion{ .x = PlainUnion{ .foo = 123 } },
+            .{},
+        );
+        defer tree.deinit();
+        try testStringify("x: 123", tree);
+    }
+    {
+        const tree = try fromArbitraryType(
+            testing.allocator,
+            AttrUnion{ .y = PlainUnion{ .bar = true } },
+            .{},
+        );
+        defer tree.deinit();
+        try testStringify("y: true", tree);
+    }
+    {
+        const tree = try fromArbitraryType(
+            testing.allocator,
+            AttrUnion{ .y = PlainUnion{ .bar = true } },
+            .{ .include_union_tags = true },
+        );
+        defer tree.deinit();
+        try testStringify("y:\n  bar: true", tree);
     }
 }
 
@@ -1904,10 +2159,7 @@ test "from type: struct" {
     };
 
     {
-        const tree = try fromArbitraryType(
-            testing.allocator,
-            MyStruct{ .foo = 1 },
-        );
+        const tree = try fromArbitraryType(testing.allocator, MyStruct{ .foo = 1 }, .{});
         defer tree.deinit();
         try testToJson("{\"foo\":\"1\",\"bar\":\"false\",\"baz\":\"null\"}", tree);
     }
@@ -1916,7 +2168,7 @@ test "from type: struct" {
 test "from type: pointer to single elem" {
     const value = false;
     {
-        const tree = try fromArbitraryType(testing.allocator, &value);
+        const tree = try fromArbitraryType(testing.allocator, &value, .{});
         defer tree.deinit();
         try testStringify("> false", tree);
     }
@@ -1928,18 +2180,18 @@ test "from type: array/slice" {
     const expected_json = "[\"1\",\"-5\",\"0\",\"123\"]";
 
     {
-        const tree = try fromArbitraryType(testing.allocator, array);
+        const tree = try fromArbitraryType(testing.allocator, array, .{});
         defer tree.deinit();
         try testToJson(expected_json, tree);
     }
     {
-        const tree = try fromArbitraryType(testing.allocator, slice);
+        const tree = try fromArbitraryType(testing.allocator, slice, .{});
         defer tree.deinit();
         try testToJson(expected_json, tree);
     }
     {
         // Pointer to array (not a slice).
-        const tree = try fromArbitraryType(testing.allocator, &array);
+        const tree = try fromArbitraryType(testing.allocator, &array, .{});
         defer tree.deinit();
         try testToJson(expected_json, tree);
     }
@@ -1947,7 +2199,7 @@ test "from type: array/slice" {
 
 test "from type: string" {
     {
-        const tree = try fromArbitraryType(testing.allocator, "hello");
+        const tree = try fromArbitraryType(testing.allocator, "hello", .{});
         defer tree.deinit();
         try testStringify("> hello", tree);
     }
