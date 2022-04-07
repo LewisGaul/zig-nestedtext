@@ -63,23 +63,40 @@ fn parseArgs() !Args {
 
     // Initalize diagnostics for reporting parsing errors.
     var diag = clap.Diagnostic{};
-    var clap_args = clap.parse(clap.Help, &params, .{ .diagnostic = &diag }) catch |err| {
+    var clap_res = clap.parse(
+        clap.Help,
+        &params,
+        .{ .PATH = clap.parsers.string, .FMT = clap.parsers.string },
+        .{ .diagnostic = &diag },
+    ) catch |err| {
         diag.report(stderr, err) catch {};
         return err;
     };
-    defer clap_args.deinit();
+    defer clap_res.deinit();
 
-    if (clap_args.flag("--help")) {
-        try stderr.print("{s} ", .{clap_args.exe_arg});
-        try clap.usage(stderr, &params);
+    if (clap_res.args.help) {
+        try stderr.print("{s} ", .{clap_res.exe_arg});
+        try clap.usage(stderr, clap.Help, &params);
         try stderr.writeByte('\n');
-        try clap.help(stderr, &params);
+        try clap.help(
+            stderr,
+            clap.Help,
+            &params,
+            .{
+                .markdown_lite = false,
+                .indent = 2,
+                .description_on_new_line = false,
+                .description_indent = 0,
+                .spacing_between_parameters = 0,
+                .max_width = 80,
+            },
+        );
         std.process.exit(0);
     }
 
     var args = Args{ .input_file = undefined, .output_file = undefined };
 
-    if (clap_args.option("--infmt")) |fmt| {
+    if (clap_res.args.infmt) |fmt| {
         args.input_format = parseFormat(fmt) catch |err| {
             try stderr.print(
                 "Unrecognised input format '{s}', should be one of 'json' or 'nt'\n",
@@ -89,7 +106,7 @@ fn parseArgs() !Args {
         };
     }
 
-    if (clap_args.option("--outfmt")) |fmt| {
+    if (clap_res.args.outfmt) |fmt| {
         args.output_format = parseFormat(fmt) catch |err| {
             try stderr.print(
                 "Unrecognised output format '{s}', should be one of 'json' or 'nt'\n",
@@ -99,7 +116,7 @@ fn parseArgs() !Args {
         };
     }
 
-    if (clap_args.option("--infile")) |infile| {
+    if (clap_res.args.infile) |infile| {
         args.input_file = std.fs.cwd().openFile(infile, .{}) catch |err| {
             try stderr.print("Failed to open file {s}\n", .{infile});
             return err;
@@ -108,7 +125,7 @@ fn parseArgs() !Args {
         args.input_file = std.io.getStdIn();
     }
 
-    if (clap_args.option("--outfile")) |outfile| {
+    if (clap_res.args.outfile) |outfile| {
         args.output_file = std.fs.cwd().createFile(outfile, .{}) catch |err| {
             try stderr.print("Failed to create file {s}\n", .{outfile});
             return err;
