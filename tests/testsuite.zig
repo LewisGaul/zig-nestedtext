@@ -222,7 +222,7 @@ fn testSingle(allocator: Allocator, dir: std.fs.Dir) !void {
     }
 }
 
-fn testAll(base_dir: std.fs.Dir) !void {
+fn testAll(base_dir: std.fs.IterableDir) !void {
     var passed: usize = 0;
     var skipped: usize = 0;
     var failed: usize = 0;
@@ -238,7 +238,7 @@ fn testAll(base_dir: std.fs.Dir) !void {
             skipped += 1;
             continue;
         }
-        var dir = try base_dir.openDir(entry.name, .{});
+        var dir = try base_dir.dir.openDir(entry.name, .{});
         defer dir.close();
         print("--- Running testcase: {s} ---\n", .{entry.name});
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -268,7 +268,7 @@ fn testAll(base_dir: std.fs.Dir) !void {
 test "All testcases" {
     std.testing.log_level = .debug;
     print("\n", .{});
-    var testcases_dir = try std.fs.cwd().openDir(testcases_path, .{ .iterate = true });
+    var testcases_dir = try std.fs.cwd().openIterableDir(testcases_path, .{});
     defer testcases_dir.close();
     try testAll(testcases_dir);
 }

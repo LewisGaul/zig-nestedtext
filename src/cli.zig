@@ -75,7 +75,7 @@ fn parseArgs() !Args {
     defer clap_res.deinit();
 
     if (clap_res.args.help) {
-        try stderr.print("{s} ", .{clap_res.exe_arg});
+        try stderr.print("{?s} ", .{clap_res.exe_arg});
         try clap.usage(stderr, clap.Help, &params);
         try stderr.writeByte('\n');
         try clap.help(
