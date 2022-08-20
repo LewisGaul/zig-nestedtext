@@ -1823,7 +1823,7 @@ test "from type: pointer to single elem" {
 }
 
 test "from type: array/slice" {
-    const array = [_]i8{ 1, -5, -0, 0123 };
+    const array = [_]i8{ 1, -5, -0, 123 };
     const slice: []const i8 = &array;
     const expected_json = "[\"1\",\"-5\",\"0\",\"123\"]";
 

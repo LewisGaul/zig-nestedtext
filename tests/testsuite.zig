@@ -98,7 +98,8 @@ fn printLine(line: []const u8) void {
 
 /// Returned memory is owned by the caller.
 fn canonicaliseJson(allocator: Allocator, json_input: []const u8) ![]const u8 {
-    var json_tree = try json.Parser.init(allocator, false).parse(json_input);
+    var parser = json.Parser.init(allocator, false);
+    var json_tree = try parser.parse(json_input);
     defer json_tree.deinit();
     var buffer = std.ArrayList(u8).init(allocator);
     errdefer buffer.deinit();
