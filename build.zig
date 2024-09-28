@@ -32,17 +32,12 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
 
     // Running tests.
-    var inline_tests = b.addTest(.{
-        .root_source_file = b.path("src/nestedtext.zig"),
-    });
-    var testsuite = b.addTest(.{
-        .root_source_file = b.path("tests/testsuite.zig"),
-    });
-    const module = b.addModule(
-        "nestedtext",
-        .{ .root_source_file = b.path("src/nestedtext.zig") },
-    );
+    const inline_tests = b.addTest(.{ .root_source_file = b.path("src/nestedtext.zig") });
+    var testsuite = b.addTest(.{ .root_source_file = b.path("tests/testsuite.zig") });
+    const module = b.addModule("nestedtext", .{ .root_source_file = b.path("src/nestedtext.zig") });
     testsuite.root_module.addImport("nestedtext", module);
+    var inline_tests_run = b.addRunArtifact(inline_tests);
+    var testsuite_run = b.addRunArtifact(testsuite);
 
     // Define the 'test' subcommand.
     // In order:
@@ -50,14 +45,14 @@ pub fn build(b: *std.Build) void {
     //  - Build the lib and exe
     //  - Run testsuite
     const test_step = b.step("test", "Run tests");
-    test_step.dependOn(&inline_tests.step);
+    test_step.dependOn(&inline_tests_run.step);
     test_step.dependOn(&lib.step);
     test_step.dependOn(&exe.step);
-    test_step.dependOn(&testsuite.step);
+    test_step.dependOn(&testsuite_run.step);
 
     // Define the 'run' subcommand.
     const run_step = b.step("run", "Run the NestedText CLI");
-    const run_cmd = b.addRunArtifact(exe);
-    if (b.args) |argv| run_cmd.addArgs(argv);
-    run_step.dependOn(&run_cmd.step);
+    const exe_run = b.addRunArtifact(exe);
+    if (b.args) |argv| exe_run.addArgs(argv);
+    run_step.dependOn(&exe_run.step);
 }

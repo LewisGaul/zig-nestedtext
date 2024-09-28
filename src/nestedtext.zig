@@ -109,6 +109,8 @@ pub const Value = union(enum) {
     }
 
     pub fn toJson(value: @This(), allocator: Allocator) !json.Value {
+        // TODO: Caller can't free the memory! Zig's json parsing returns a
+        //       'Parsed' object that contains the value and supports deinit().
         switch (value) {
             .String => |inner| return json.Value{ .string = inner },
             .List => |inner| {
@@ -726,7 +728,7 @@ pub const Parser = struct {
                     // Try each of the union fields until we find one with a type
                     // that the value can successfully be parsed into.
                     inline for (union_info.fields) |field| {
-                        if (p.parseTypedInternal(field.field_type, value)) |val| {
+                        if (p.parseTypedInternal(field.type, value)) |val| {
                             return @unionInit(T, field.name, val);
                         } else |err| {
                             // Bubble up OutOfMemory error.
@@ -755,7 +757,7 @@ pub const Parser = struct {
                 errdefer {
                     inline for (struct_info.fields, 0..) |field, i|
                         if (fields_seen[i] and !field.is_comptime)
-                            p.parseTypedFreeInternal(field.field_type, @field(ret, field.name));
+                            p.parseTypedFreeInternal(field.type, @field(ret, field.name));
                 }
                 // Loop over values in the parsed object.
                 var iter = obj.iterator();
@@ -771,7 +773,7 @@ pub const Parser = struct {
                                 // TODO: ??
                                 return error.NotImplemented;
                             } else {
-                                @field(ret, field.name) = try p.parseTypedInternal(field.field_type, val);
+                                @field(ret, field.name) = try p.parseTypedInternal(field.type, val);
                             }
                             fields_seen[i] = true;
                             key_field_found = true;
@@ -814,7 +816,7 @@ pub const Parser = struct {
                     .String => |str| {
                         if (array_info.child != u8) return error.UnexpectedType;
                         if (str.len != ret.len) return error.UnexpectedType;
-                        std.mem.copy(u8, &ret, str);
+                        std.mem.copyForwards(u8, &ret, str);
                     },
                     else => return error.UnexpectedType,
                 }
@@ -872,7 +874,7 @@ pub const Parser = struct {
                 if (union_info.tag_type) |UnionTagType| {
                     inline for (union_info.fields) |field| {
                         if (value == @field(UnionTagType, field.name)) {
-                            p.parseTypedFreeInternal(field.field_type, @field(value, field.name));
+                            p.parseTypedFreeInternal(field.type, @field(value, field.name));
                             break;
                         }
                     }
@@ -881,7 +883,7 @@ pub const Parser = struct {
             .Struct => |struct_info| {
                 inline for (struct_info.fields) |field| {
                     if (!field.is_comptime) {
-                        p.parseTypedFreeInternal(field.field_type, @field(value, field.name));
+                        p.parseTypedFreeInternal(field.type, @field(value, field.name));
                     }
                 }
             },
