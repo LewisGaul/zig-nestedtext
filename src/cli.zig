@@ -6,7 +6,7 @@ const clap = @import("clap");
 
 const nestedtext = @import("nestedtext.zig");
 
-const WriteError = std.os.WriteError;
+const WriteError = std.posix.WriteError;
 const File = std.fs.File;
 const Allocator = std.mem.Allocator;
 
@@ -67,14 +67,14 @@ fn parseArgs() !Args {
         clap.Help,
         &params,
         .{ .PATH = clap.parsers.string, .FMT = clap.parsers.string },
-        .{ .diagnostic = &diag },
+        .{ .allocator = allocator, .diagnostic = &diag },
     ) catch |err| {
         diag.report(stderr, err) catch {};
         return err;
     };
     defer clap_res.deinit();
 
-    if (clap_res.args.help) {
+    if (clap_res.args.help != 0) {
         try stderr.print("{?s} ", .{clap_res.exe_arg});
         try clap.usage(stderr, clap.Help, &params);
         try stderr.writeByte('\n');
@@ -197,12 +197,12 @@ fn mainWorker() WriteError!u8 {
 
             switch (args.output_format) {
                 .Json => {
-                    var json_tree = tree.root.?.toJson(allocator) catch {
+                    const json_tree = tree.root.?.toJson(allocator) catch {
                         try stderr.writeAll("Failed to convert NestedText to JSON\n");
                         return 1;
                     };
                     logger.debug("{d:6} Converted to JSON", .{elapsed()});
-                    try json_tree.root.jsonStringify(.{}, out_stream);
+                    try json.stringify(json_tree, .{}, out_stream);
                     logger.debug("{d:6} Stringified JSON", .{elapsed()});
                 },
                 .NestedText => {
@@ -212,8 +212,7 @@ fn mainWorker() WriteError!u8 {
             }
         },
         .Json => {
-            var parser = json.Parser.init(allocator, false);
-            var tree = parser.parse(input) catch {
+            const tree = json.parseFromSliceLeaky(json.Value, allocator, input, .{}) catch {
                 try stderr.writeAll("Failed to parse input as JSON\n");
                 return 1;
             };
@@ -221,11 +220,11 @@ fn mainWorker() WriteError!u8 {
 
             switch (args.output_format) {
                 .Json => {
-                    try tree.root.jsonStringify(.{}, out_stream);
+                    try json.stringify(tree, .{}, out_stream);
                     logger.debug("{d:6} Stringified JSON", .{elapsed()});
                 },
                 .NestedText => {
-                    var nt_tree = nestedtext.fromJson(allocator, tree.root) catch {
+                    var nt_tree = nestedtext.fromJson(allocator, tree) catch {
                         try stderr.writeAll("Failed to convert JSON to NestedText\n");
                         return 1;
                     };

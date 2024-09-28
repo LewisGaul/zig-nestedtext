@@ -1,6 +1,6 @@
-const Builder = @import("std").build.Builder;
+const std = @import("std");
 
-pub fn build(b: *Builder) void {
+pub fn build(b: *std.Build) void {
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
@@ -9,27 +9,40 @@ pub fn build(b: *Builder) void {
 
     // Standard release options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
-    const mode = b.standardReleaseOptions();
+    const mode = b.standardOptimizeOption(.{});
 
     // Building the nestedtext lib.
-    const lib = b.addStaticLibrary("nestedtext", "src/nestedtext.zig");
-    lib.setTarget(target);
-    lib.setBuildMode(mode);
-    lib.install();
+    const lib = b.addStaticLibrary(.{
+        .name = "nestedtext",
+        .root_source_file = b.path("src/nestedtext.zig"),
+        .target = target,
+        .optimize = mode,
+    });
+    b.installArtifact(lib);
 
     // Building the nt-cli exe.
-    const exe = b.addExecutable("nt-cli", "src/cli.zig");
-    exe.setTarget(target);
-    exe.setBuildMode(mode);
-    exe.addPackagePath("clap", "deps/zig-clap/clap.zig");
-    exe.install();
+    const exe = b.addExecutable(.{
+        .name = "nt-cli",
+        .root_source_file = b.path("src/cli.zig"),
+        .target = target,
+        .optimize = mode,
+    });
+    const clap = b.dependency("clap", .{});
+    exe.root_module.addImport("clap", clap.module("clap"));
+    b.installArtifact(exe);
 
     // Running tests.
-    var inline_tests = b.addTest("src/nestedtext.zig");
-    inline_tests.setBuildMode(mode);
-    var testsuite = b.addTest("tests/testsuite.zig");
-    testsuite.setBuildMode(mode);
-    testsuite.addPackagePath("nestedtext", "src/nestedtext.zig");
+    var inline_tests = b.addTest(.{
+        .root_source_file = b.path("src/nestedtext.zig"),
+    });
+    var testsuite = b.addTest(.{
+        .root_source_file = b.path("tests/testsuite.zig"),
+    });
+    const module = b.addModule(
+        "nestedtext",
+        .{ .root_source_file = b.path("src/nestedtext.zig") },
+    );
+    testsuite.root_module.addImport("nestedtext", module);
 
     // Define the 'test' subcommand.
     // In order:
@@ -42,10 +55,9 @@ pub fn build(b: *Builder) void {
     test_step.dependOn(&exe.step);
     test_step.dependOn(&testsuite.step);
 
-    const run_cmd = exe.run();
-    run_cmd.step.dependOn(&exe.step); // TODO: Is this needed?
-
     // Define the 'run' subcommand.
     const run_step = b.step("run", "Run the NestedText CLI");
+    const run_cmd = b.addRunArtifact(exe);
+    if (b.args) |argv| run_cmd.addArgs(argv);
     run_step.dependOn(&run_cmd.step);
 }

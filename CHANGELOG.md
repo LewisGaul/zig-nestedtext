@@ -1,6 +1,11 @@
 # Changelog
 
 
+## v0.5.0 (unreleased)
+
+- Building with Zig 0.13
+
+
 ## v0.4.0 (2022-01-03)
 
 - Move to support Zig 0.9, use `zig-0.8` branch for v0.8 support
