@@ -2,10 +2,9 @@
 
 [![Build badge](https://img.shields.io/github/workflow/status/LewisGaul/zig-nestedtext/Run%20tests/main)](https://github.com/LewisGaul/zig-nestedtext/actions/workflows/tests.yml?query=branch%3Amain)
 [![Release badge](https://img.shields.io/github/v/release/LewisGaul/zig-nestedtext?include_prereleases&sort=semver)](https://github.com/LewisGaul/zig-nestedtext/releases/)
-[![Gyro badge](https://img.shields.io/badge/gyro-nestedtext-blue)](https://astrolabe.pm/#/tag/nestedtext)
 
 
-A NestedText parser written in Zig 0.9 targeting [NestedText v2.0](https://nestedtext.org/en/v2.0/) (note [Deviations From Specification](#deviations-from-specification) below).
+A NestedText parser written in Zig 0.13 targeting [NestedText v2.0](https://nestedtext.org/en/v2.0/) (note [Deviations From Specification](#deviations-from-specification) below).
 
 See my [Zig NestedText Library blog post](https://www.lewisgaul.co.uk/blog/coding/2021/04/18/zig-nestedtext/).
 
@@ -110,6 +109,13 @@ To summarise the rationale behind this deviation:
  - On balance, the author of this project has decided that the potential confusion from the use of trailing commas to indicate empty values is not worth the convenience it brings to more experienced users.
 
 If you have any thoughts about this either way, please consider posting a comment to <https://github.com/LewisGaul/zig-nestedtext/issues/17>.
+
+### Line Endings Preserved
+
+When a string contains newlines, those newlines are preserved from the NestedText content itself.
+Without this, it is impossible to represent carriage return and newline characters in a platform-independent, implementation-independent way.
+
+This has been discussed at <https://github.com/KenKundert/nestedtext_tests/issues/5>.
 
 
 ## Changelog

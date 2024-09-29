@@ -43,9 +43,9 @@ jobs:
           fetch-depth: 0
 
       - name: Zig setup
-        uses: goto-bus-stop/setup-zig@v1
+        uses: mlugg/setup-zig@v1
         with:
-          version: 0.9.0
+          version: 0.13.0
 
       - run: mkdir ${{ env.TARGET }}
 
@@ -81,9 +81,9 @@ jobs:
           fetch-depth: 0
 
       - name: Zig setup
-        uses: goto-bus-stop/setup-zig@v1
+        uses: mlugg/setup-zig@v1
         with:
-          version: 0.9.0
+          version: 0.13.0
 
       - run: sudo apt install zip
       - run: mkdir ${{ env.TARGET }}
@@ -110,7 +110,7 @@ jobs:
     needs: create_release
     strategy:
       matrix:
-        arch: [x86_64]
+        arch: [x86_64, aarch64]
     env:
       TARGET: zig-nestedtext-${{ needs.create_release.outputs.tag }}-macos-${{ matrix.arch }}
     steps:
@@ -120,14 +120,14 @@ jobs:
           fetch-depth: 0
 
       - name: Zig setup
-        uses: goto-bus-stop/setup-zig@v1
+        uses: mlugg/setup-zig@v1
         with:
-          version: 0.9.0
+          version: 0.13.0
 
       - run: mkdir ${{ env.TARGET }}
 
       - name: macos-${{ matrix.arch }}
-        run: zig build -Drelease-safe --prefix ${{ env.TARGET }}
+        run: zig build -target=${{ matrix.arch }}-macos -Drelease-safe --prefix ${{ env.TARGET }}
 
       - name: Create tarball
         run: tar -czvf ${{ env.TARGET }}.tar.gz ${{ env.TARGET }}

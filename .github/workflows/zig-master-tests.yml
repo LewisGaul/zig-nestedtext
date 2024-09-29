@@ -15,7 +15,7 @@ jobs:
           ref: zig-master
 
       - name: Zig setup
-        uses: goto-bus-stop/setup-zig@v1
+        uses: mlugg/setup-zig@v1
         with:
           version: master
 
@@ -30,7 +30,7 @@ jobs:
           ref: zig-master
 
       - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@v1
+        uses: mlugg/setup-zig@v1
         with:
           version: master
 
