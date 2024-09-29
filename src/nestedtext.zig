@@ -498,46 +498,51 @@ pub const Parser = struct {
             } else if (parseString(tab_stripped)) |index| {
                 kind = if (tab_stripped.len < stripped.len)
                     .InvalidTabIndent
-                else .{
-                    .String = .{
-                        .value = full_line[text.len - stripped.len + index ..],
-                    },
-                };
+                else
+                    .{
+                        .String = .{
+                            .value = full_line[text.len - stripped.len + index ..],
+                        },
+                    };
             } else if (parseList(tab_stripped)) |value| {
                 kind = if (tab_stripped.len < stripped.len)
                     .InvalidTabIndent
-                else .{
-                    .ListItem = .{
-                        .value = if (value.len > 0) value else null,
-                    },
-                };
+                else
+                    .{
+                        .ListItem = .{
+                            .value = if (value.len > 0) value else null,
+                        },
+                    };
             } else if (parseInlineContainer(tab_stripped)) {
                 kind = if (tab_stripped.len < stripped.len)
                     .InvalidTabIndent
-                else .{
-                    .InlineContainer = .{
-                        .value = std.mem.trimRight(u8, stripped, " \t"),
-                    },
-                };
+                else
+                    .{
+                        .InlineContainer = .{
+                            .value = std.mem.trimRight(u8, stripped, " \t"),
+                        },
+                    };
             } else if (parseObjectKey(tab_stripped)) |index| {
                 // Behaves just like string line.
                 kind = if (tab_stripped.len < stripped.len)
                     .InvalidTabIndent
-                else .{
-                    .ObjectKey = .{
-                        .value = full_line[text.len - stripped.len + index ..],
-                    },
-                };
+                else
+                    .{
+                        .ObjectKey = .{
+                            .value = full_line[text.len - stripped.len + index ..],
+                        },
+                    };
             } else if (parseObject(tab_stripped)) |result| {
                 kind = if (tab_stripped.len < stripped.len)
                     .InvalidTabIndent
-                else .{
-                    .ObjectItem = .{
-                        .key = result[0].?,
-                        // May be null if the value is on the following line(s).
-                        .value = result[1],
-                    },
-                };
+                else
+                    .{
+                        .ObjectItem = .{
+                            .key = result[0].?,
+                            // May be null if the value is on the following line(s).
+                            .value = result[1],
+                        },
+                    };
             } else {
                 kind = .Unrecognised;
             }

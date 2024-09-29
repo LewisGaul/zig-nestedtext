@@ -269,7 +269,7 @@ fn testAll(base_dir: std.fs.Dir) !void {
 test "All testcases" {
     std.testing.log_level = .debug;
     print("\n", .{});
-    var testcases_dir = try std.fs.cwd().openDir(testcases_path, .{.iterate = true});
+    var testcases_dir = try std.fs.cwd().openDir(testcases_path, .{ .iterate = true });
     defer testcases_dir.close();
     try testAll(testcases_dir);
 }
