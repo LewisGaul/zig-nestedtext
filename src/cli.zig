@@ -197,7 +197,7 @@ fn mainWorker() WriteError!u8 {
 
             switch (args.output_format) {
                 .Json => {
-                    const json_tree = tree.root.?.toJson(allocator) catch {
+                    const json_tree = tree.root.?.toJsonLeaky(allocator) catch {
                         try stderr.writeAll("Failed to convert NestedText to JSON\n");
                         return 1;
                     };

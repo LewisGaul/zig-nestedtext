@@ -83,13 +83,6 @@ pub const ValueTree = struct {
         if (self.root) |value|
             try value.stringify(options, out_stream);
     }
-
-    pub fn toJson(self: @This(), allocator: Allocator) !json.Value {
-        if (self.root) |value|
-            return value.toJson(allocator)
-        else
-            return json.Value.null;
-    }
 };
 
 pub const Map = StringArrayHashMap(Value);
@@ -108,15 +101,27 @@ pub const Value = union(enum) {
         try value.stringifyInternal(options, out_stream, 0, false, false);
     }
 
-    pub fn toJson(value: @This(), allocator: Allocator) !json.Value {
-        // TODO: Caller can't free the memory! Zig's json parsing returns a
-        //       'Parsed' object that contains the value and supports deinit().
+    pub fn toJson(value: @This(), allocator: Allocator) !json.Parsed(json.Value) {
+        var parsed = json.Parsed(json.Value){
+            .arena = try allocator.create(ArenaAllocator),
+            .value = undefined,
+        };
+        errdefer allocator.destroy(parsed.arena);
+        parsed.arena.* = ArenaAllocator.init(allocator);
+        errdefer parsed.arena.deinit();
+
+        parsed.value = try value.toJsonLeaky(parsed.arena.allocator());
+
+        return parsed;
+    }
+
+    pub fn toJsonLeaky(value: @This(), allocator: Allocator) !json.Value {
         switch (value) {
             .String => |inner| return json.Value{ .string = inner },
             .List => |inner| {
                 var json_array = json.Array.init(allocator);
                 for (inner.items) |elem| {
-                    const json_elem = try elem.toJson(allocator);
+                    const json_elem = try elem.toJsonLeaky(allocator);
                     try json_array.append(json_elem);
                 }
                 return json.Value{ .array = json_array };
@@ -125,7 +130,7 @@ pub const Value = union(enum) {
                 var json_map = json.ObjectMap.init(allocator);
                 var iter = inner.iterator();
                 while (iter.next()) |elem| {
-                    const json_value = try elem.value_ptr.*.toJson(allocator);
+                    const json_value = try elem.value_ptr.*.toJsonLeaky(allocator);
                     try json_map.put(elem.key_ptr.*, json_value);
                 }
                 return json.Value{ .object = json_map };
@@ -1525,10 +1530,11 @@ fn testStringify(expected: []const u8, tree: ValueTree) !void {
 }
 
 fn testToJson(expected: []const u8, tree: ValueTree) !void {
-    const json_tree = try tree.toJson(testing.allocator);
+    const parsed_json = try tree.root.?.toJson(testing.allocator);
+    defer parsed_json.deinit();
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try json.stringify(json_tree, .{}, fbs.writer());
+    try json.stringify(parsed_json.value, .{}, fbs.writer());
     try testing.expectEqualStrings(expected, fbs.getWritten());
 }
 

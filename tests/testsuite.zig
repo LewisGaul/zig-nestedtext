@@ -137,14 +137,18 @@ fn testParseSuccess(input_nt: []const u8, expected_json: []const u8) !void {
         return e;
     };
     defer nt_tree.deinit();
-    const json_tree = try nt_tree.toJson(testing.allocator);
-    // defer json_tree.deinit();  TODO: Oh! Can't free the json value now...
+    if (nt_tree.root) |nt_value| {
+        const parsed_json = try nt_value.toJson(testing.allocator);
+        defer parsed_json.deinit();
 
-    var buffer = std.ArrayList(u8).init(testing.allocator);
-    defer buffer.deinit();
-    try json.stringify(json_tree, .{}, buffer.writer());
+        var buffer = std.ArrayList(u8).init(testing.allocator);
+        defer buffer.deinit();
+        try json.stringify(parsed_json.value, .{}, buffer.writer());
 
-    try expectEqualStrings(expected_json, buffer.items);
+        try expectEqualStrings(expected_json, buffer.items);
+    } else {
+        try expectEqualStrings(expected_json, "null");
+    }
 }
 
 fn testParseError(input_nt: []const u8, expected_error: ParseErrorInfo) !void {
