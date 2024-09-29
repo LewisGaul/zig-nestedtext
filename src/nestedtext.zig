@@ -83,16 +83,6 @@ pub const ValueTree = struct {
         if (self.root) |value|
             try value.stringify(options, out_stream);
     }
-
-    pub fn toJson(self: @This(), allocator: Allocator) !json.ValueTree {
-        if (self.root) |value|
-            return value.toJson(allocator)
-        else
-            return json.ValueTree{
-                .arena = ArenaAllocator.init(allocator),
-                .root = json.Value.Null,
-            };
-    }
 };
 
 pub const Map = StringArrayHashMap(Value);
@@ -111,32 +101,39 @@ pub const Value = union(enum) {
         try value.stringifyInternal(options, out_stream, 0, false, false);
     }
 
-    pub fn toJson(value: @This(), allocator: Allocator) !json.ValueTree {
-        var json_tree: json.ValueTree = undefined;
-        json_tree.arena = ArenaAllocator.init(allocator);
-        json_tree.root = try value.toJsonValue(json_tree.arena.allocator());
-        return json_tree;
+    pub fn toJson(value: @This(), allocator: Allocator) !json.Parsed(json.Value) {
+        var parsed = json.Parsed(json.Value){
+            .arena = try allocator.create(ArenaAllocator),
+            .value = undefined,
+        };
+        errdefer allocator.destroy(parsed.arena);
+        parsed.arena.* = ArenaAllocator.init(allocator);
+        errdefer parsed.arena.deinit();
+
+        parsed.value = try value.toJsonLeaky(parsed.arena.allocator());
+
+        return parsed;
     }
 
-    fn toJsonValue(value: @This(), allocator: Allocator) anyerror!json.Value {
+    pub fn toJsonLeaky(value: @This(), allocator: Allocator) !json.Value {
         switch (value) {
-            .String => |inner| return json.Value{ .String = inner },
+            .String => |inner| return json.Value{ .string = inner },
             .List => |inner| {
                 var json_array = json.Array.init(allocator);
                 for (inner.items) |elem| {
-                    const json_elem = try elem.toJsonValue(allocator);
+                    const json_elem = try elem.toJsonLeaky(allocator);
                     try json_array.append(json_elem);
                 }
-                return json.Value{ .Array = json_array };
+                return json.Value{ .array = json_array };
             },
             .Object => |inner| {
                 var json_map = json.ObjectMap.init(allocator);
                 var iter = inner.iterator();
                 while (iter.next()) |elem| {
-                    const json_value = try elem.value_ptr.*.toJsonValue(allocator);
+                    const json_value = try elem.value_ptr.*.toJsonLeaky(allocator);
                     try json_map.put(elem.key_ptr.*, json_value);
                 }
-                return json.Value{ .Object = json_map };
+                return json.Value{ .object = json_map };
             },
         }
     }
@@ -277,37 +274,37 @@ pub fn fromJson(allocator: Allocator, json_value: json.Value) !ValueTree {
 
 fn fromJsonInternal(allocator: Allocator, json_value: json.Value) anyerror!Value {
     switch (json_value) {
-        .Null => return Value{ .String = "null" },
-        .Bool => |inner| return Value{ .String = if (inner) "true" else "false" },
-        .Integer,
-        .Float,
-        .String,
-        .NumberString,
+        .null => return Value{ .String = "null" },
+        .bool => |inner| return Value{ .String = if (inner) "true" else "false" },
+        .integer,
+        .float,
+        .string,
+        .number_string,
         => {
             var buffer = ArrayList(u8).init(allocator);
             errdefer buffer.deinit();
             switch (json_value) {
-                .Integer => |inner| {
+                .integer => |inner| {
                     try buffer.writer().print("{d}", .{inner});
                 },
-                .Float => |inner| {
+                .float => |inner| {
                     try buffer.writer().print("{e}", .{inner});
                 },
-                .String, .NumberString => |inner| {
+                .string, .number_string => |inner| {
                     try buffer.writer().print("{s}", .{inner});
                 },
                 else => unreachable,
             }
             return Value{ .String = buffer.items };
         },
-        .Array => |inner| {
+        .array => |inner| {
             var array = Array.init(allocator);
             for (inner.items) |elem| {
                 try array.append(try fromJsonInternal(allocator, elem));
             }
             return Value{ .List = array };
         },
-        .Object => |inner| {
+        .object => |inner| {
             var map = Map.init(allocator);
             var iter = inner.iterator();
             while (iter.next()) |elem| {
@@ -501,46 +498,51 @@ pub const Parser = struct {
             } else if (parseString(tab_stripped)) |index| {
                 kind = if (tab_stripped.len < stripped.len)
                     .InvalidTabIndent
-                else .{
-                    .String = .{
-                        .value = full_line[text.len - stripped.len + index ..],
-                    },
-                };
+                else
+                    .{
+                        .String = .{
+                            .value = full_line[text.len - stripped.len + index ..],
+                        },
+                    };
             } else if (parseList(tab_stripped)) |value| {
                 kind = if (tab_stripped.len < stripped.len)
                     .InvalidTabIndent
-                else .{
-                    .ListItem = .{
-                        .value = if (value.len > 0) value else null,
-                    },
-                };
+                else
+                    .{
+                        .ListItem = .{
+                            .value = if (value.len > 0) value else null,
+                        },
+                    };
             } else if (parseInlineContainer(tab_stripped)) {
                 kind = if (tab_stripped.len < stripped.len)
                     .InvalidTabIndent
-                else .{
-                    .InlineContainer = .{
-                        .value = std.mem.trimRight(u8, stripped, " \t"),
-                    },
-                };
+                else
+                    .{
+                        .InlineContainer = .{
+                            .value = std.mem.trimRight(u8, stripped, " \t"),
+                        },
+                    };
             } else if (parseObjectKey(tab_stripped)) |index| {
                 // Behaves just like string line.
                 kind = if (tab_stripped.len < stripped.len)
                     .InvalidTabIndent
-                else .{
-                    .ObjectKey = .{
-                        .value = full_line[text.len - stripped.len + index ..],
-                    },
-                };
+                else
+                    .{
+                        .ObjectKey = .{
+                            .value = full_line[text.len - stripped.len + index ..],
+                        },
+                    };
             } else if (parseObject(tab_stripped)) |result| {
                 kind = if (tab_stripped.len < stripped.len)
                     .InvalidTabIndent
-                else .{
-                    .ObjectItem = .{
-                        .key = result[0].?,
-                        // May be null if the value is on the following line(s).
-                        .value = result[1],
-                    },
-                };
+                else
+                    .{
+                        .ObjectItem = .{
+                            .key = result[0].?,
+                            // May be null if the value is on the following line(s).
+                            .value = result[1],
+                        },
+                    };
             } else {
                 kind = .Unrecognised;
             }
@@ -573,7 +575,7 @@ pub const Parser = struct {
         }
 
         fn parseObject(text: []const u8) ?[2]?[]const u8 {
-            for (text) |char, i| {
+            for (text, 0..) |char, i| {
                 if (char == ':') {
                     if (text.len > i + 1 and text[i + 1] != ' ') continue;
                     const key = std.mem.trim(u8, text[0..i], " \t");
@@ -736,7 +738,7 @@ pub const Parser = struct {
                     // Try each of the union fields until we find one with a type
                     // that the value can successfully be parsed into.
                     inline for (union_info.fields) |field| {
-                        if (p.parseTypedInternal(field.field_type, value)) |val| {
+                        if (p.parseTypedInternal(field.type, value)) |val| {
                             return @unionInit(T, field.name, val);
                         } else |err| {
                             // Bubble up OutOfMemory error.
@@ -763,9 +765,9 @@ pub const Parser = struct {
                 // Keep track of fields seen for error cleanup.
                 var fields_seen = [_]bool{false} ** struct_info.fields.len;
                 errdefer {
-                    inline for (struct_info.fields) |field, i|
+                    inline for (struct_info.fields, 0..) |field, i|
                         if (fields_seen[i] and !field.is_comptime)
-                            p.parseTypedFreeInternal(field.field_type, @field(ret, field.name));
+                            p.parseTypedFreeInternal(field.type, @field(ret, field.name));
                 }
                 // Loop over values in the parsed object.
                 var iter = obj.iterator();
@@ -775,13 +777,13 @@ pub const Parser = struct {
                     var key_field_found = false;
 
                     // Loop over struct fields, looking for one that matches the current key.
-                    inline for (struct_info.fields) |field, i| {
+                    inline for (struct_info.fields, 0..) |field, i| {
                         if (std.mem.eql(u8, field.name, key)) {
                             if (field.is_comptime) {
                                 // TODO: ??
                                 return error.NotImplemented;
                             } else {
-                                @field(ret, field.name) = try p.parseTypedInternal(field.field_type, val);
+                                @field(ret, field.name) = try p.parseTypedInternal(field.type, val);
                             }
                             fields_seen[i] = true;
                             key_field_found = true;
@@ -793,7 +795,7 @@ pub const Parser = struct {
                 }
 
                 // Check for missing fields.
-                inline for (struct_info.fields) |field, i| if (!fields_seen[i]) {
+                inline for (struct_info.fields, 0..) |field, i| if (!fields_seen[i]) {
                     if (field.default_value) |default| {
                         if (!field.is_comptime)
                             @field(ret, field.name) = default;
@@ -824,7 +826,7 @@ pub const Parser = struct {
                     .String => |str| {
                         if (array_info.child != u8) return error.UnexpectedType;
                         if (str.len != ret.len) return error.UnexpectedType;
-                        std.mem.copy(u8, &ret, str);
+                        std.mem.copyForwards(u8, &ret, str);
                     },
                     else => return error.UnexpectedType,
                 }
@@ -882,7 +884,7 @@ pub const Parser = struct {
                 if (union_info.tag_type) |UnionTagType| {
                     inline for (union_info.fields) |field| {
                         if (value == @field(UnionTagType, field.name)) {
-                            p.parseTypedFreeInternal(field.field_type, @field(value, field.name));
+                            p.parseTypedFreeInternal(field.type, @field(value, field.name));
                             break;
                         }
                     }
@@ -891,7 +893,7 @@ pub const Parser = struct {
             .Struct => |struct_info| {
                 inline for (struct_info.fields) |field| {
                     if (!field.is_comptime) {
-                        p.parseTypedFreeInternal(field.field_type, @field(value, field.name));
+                        p.parseTypedFreeInternal(field.type, @field(value, field.name));
                     }
                 }
             },
@@ -1533,12 +1535,11 @@ fn testStringify(expected: []const u8, tree: ValueTree) !void {
 }
 
 fn testToJson(expected: []const u8, tree: ValueTree) !void {
-    var json_tree = try tree.toJson(testing.allocator);
-    defer json_tree.deinit();
-
+    const parsed_json = try tree.root.?.toJson(testing.allocator);
+    defer parsed_json.deinit();
     var buffer: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try json_tree.root.jsonStringify(.{}, fbs.writer());
+    try json.stringify(parsed_json.value, .{}, fbs.writer());
     try testing.expectEqualStrings(expected, fbs.getWritten());
 }
 
@@ -1823,7 +1824,7 @@ test "from type: pointer to single elem" {
 }
 
 test "from type: array/slice" {
-    const array = [_]i8{ 1, -5, -0, 0123 };
+    const array = [_]i8{ 1, -5, 0, 123 };
     const slice: []const i8 = &array;
     const expected_json = "[\"1\",\"-5\",\"0\",\"123\"]";
 

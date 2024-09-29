@@ -1,6 +1,12 @@
 # Changelog
 
 
+## v0.5.0 (2024-09-29)
+
+- Move to support Zig 0.13
+- Update the `toJson()` methods in line with `std.json` changes
+
+
 ## v0.4.0 (2022-01-03)
 
 - Move to support Zig 0.9, use `zig-0.8` branch for v0.8 support

@@ -2,6 +2,8 @@ name: Run tests against zig-master branch
 on:
   schedule:
     - cron: "0 18 * * *"  # Run at 6pm every day
+  push:
+    branches: [zig-master]
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -13,7 +15,7 @@ jobs:
           ref: zig-master
 
       - name: Zig setup
-        uses: goto-bus-stop/setup-zig@v1
+        uses: mlugg/setup-zig@v1
         with:
           version: master
 
@@ -28,7 +30,7 @@ jobs:
           ref: zig-master
 
       - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@v1
+        uses: mlugg/setup-zig@v1
         with:
           version: master
 

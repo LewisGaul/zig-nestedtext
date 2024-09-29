@@ -98,11 +98,12 @@ fn printLine(line: []const u8) void {
 
 /// Returned memory is owned by the caller.
 fn canonicaliseJson(allocator: Allocator, json_input: []const u8) ![]const u8 {
-    var json_tree = try json.Parser.init(allocator, false).parse(json_input);
-    defer json_tree.deinit();
+    var parsed_json = try json.parseFromSlice(json.Value, allocator, json_input, .{});
+    defer parsed_json.deinit();
+    const json_tree = parsed_json.value;
     var buffer = std.ArrayList(u8).init(allocator);
     errdefer buffer.deinit();
-    try json_tree.root.jsonStringify(.{}, buffer.writer());
+    try json.stringify(json_tree, .{}, buffer.writer());
     return buffer.items;
 }
 
@@ -136,14 +137,18 @@ fn testParseSuccess(input_nt: []const u8, expected_json: []const u8) !void {
         return e;
     };
     defer nt_tree.deinit();
-    var json_tree = try nt_tree.toJson(testing.allocator);
-    defer json_tree.deinit();
+    if (nt_tree.root) |nt_value| {
+        const parsed_json = try nt_value.toJson(testing.allocator);
+        defer parsed_json.deinit();
 
-    var buffer = std.ArrayList(u8).init(testing.allocator);
-    defer buffer.deinit();
-    try json_tree.root.jsonStringify(.{}, buffer.writer());
+        var buffer = std.ArrayList(u8).init(testing.allocator);
+        defer buffer.deinit();
+        try json.stringify(parsed_json.value, .{}, buffer.writer());
 
-    try expectEqualStrings(expected_json, buffer.items);
+        try expectEqualStrings(expected_json, buffer.items);
+    } else {
+        try expectEqualStrings(expected_json, "null");
+    }
 }
 
 fn testParseError(input_nt: []const u8, expected_error: ParseErrorInfo) !void {
@@ -168,11 +173,9 @@ fn testParseError(input_nt: []const u8, expected_error: ParseErrorInfo) !void {
 
 fn testDumpSuccess(input_json: []const u8, expected_nt: []const u8) !void {
     logger.debug("Checking for dumping success", .{});
-    var json_parser = json.Parser.init(testing.allocator, false);
-    defer json_parser.deinit();
-    var json_tree = try json_parser.parse(input_json);
-    defer json_tree.deinit();
-    var nt_tree = try nestedtext.fromJson(testing.allocator, json_tree.root);
+    var parsed_json = try json.parseFromSlice(json.Value, testing.allocator, input_json, .{});
+    defer parsed_json.deinit();
+    var nt_tree = try nestedtext.fromJson(testing.allocator, parsed_json.value);
     defer nt_tree.deinit();
 
     var buffer = std.ArrayList(u8).init(testing.allocator);
@@ -190,11 +193,9 @@ fn testSingle(allocator: Allocator, dir: std.fs.Dir) !void {
             const expected = try canonicaliseJson(allocator, load_out);
             try testParseSuccess(input, expected);
         } else if (try readFileIfExists(dir, allocator, "load_err.json")) |load_err| {
-            const json_parse_opts = json.ParseOptions{ .allocator = allocator };
-            var stream = json.TokenStream.init(load_err);
-            const err_json = try json.parse(ParseErrorInfo, &stream, json_parse_opts);
-            defer json.parseFree(ParseErrorInfo, err_json, json_parse_opts);
-            try testParseError(input, err_json);
+            var parsed_err_json = try json.parseFromSlice(ParseErrorInfo, allocator, load_err, .{});
+            defer parsed_err_json.deinit();
+            try testParseError(input, parsed_err_json.value);
         } else {
             logger.err("Expected one of 'load_out.json' or 'load_err.json'", .{});
             return error.InvalidTestcase;
@@ -232,7 +233,7 @@ fn testAll(base_dir: std.fs.Dir) !void {
     print("\n", .{});
     var iter = base_dir.iterate();
     while (try iter.next()) |*entry| {
-        std.debug.assert(entry.kind == .Directory);
+        std.debug.assert(entry.kind == .directory);
         if (skipTestcase(entry.name)) {
             print("--- Skipping testcase: {s} ---\n\n", .{entry.name});
             skipped += 1;
