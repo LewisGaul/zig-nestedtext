@@ -33,7 +33,7 @@ jobs:
     needs: create_release
     strategy:
       matrix:
-        arch: [x86_64, aarch64, riscv64, i386]
+        arch: [x86_64, aarch64, riscv64]
     env:
       TARGET: zig-nestedtext-${{ needs.create_release.outputs.tag }}-linux-${{ matrix.arch }}
     steps:
@@ -50,7 +50,7 @@ jobs:
       - run: mkdir ${{ env.TARGET }}
 
       - name: linux-${{ matrix.arch }}
-        run: zig build -Dtarget=${{ matrix.arch }}-linux -Drelease-safe --prefix ${{ env.TARGET }}
+        run: zig build -Dtarget=${{ matrix.arch }}-linux -Doptimize=ReleaseSafe --prefix ${{ env.TARGET }}
 
       - name: Create Tarball
         run: tar -czvf ${{ env.TARGET }}.tar.gz ${{ env.TARGET }}
@@ -71,7 +71,7 @@ jobs:
     needs: create_release
     strategy:
       matrix:
-        arch: [x86_64, i386]
+        arch: [x86_64]
     env:
       TARGET: zig-nestedtext-${{ needs.create_release.outputs.tag }}-windows-${{ matrix.arch }}
     steps:
@@ -89,7 +89,7 @@ jobs:
       - run: mkdir ${{ env.TARGET }}
 
       - name: windows-${{ matrix.arch }}
-        run: zig build -Dtarget=${{ matrix.arch }}-windows-gnu -Drelease-safe --prefix ${{ env.TARGET }}
+        run: zig build -Dtarget=${{ matrix.arch }}-windows -Doptimize=ReleaseSafe --prefix ${{ env.TARGET }}
 
       - name: Create zip
         run: zip -r ${{ env.TARGET }}.zip ${{ env.TARGET }}
@@ -127,7 +127,7 @@ jobs:
       - run: mkdir ${{ env.TARGET }}
 
       - name: macos-${{ matrix.arch }}
-        run: zig build -target=${{ matrix.arch }}-macos -Drelease-safe --prefix ${{ env.TARGET }}
+        run: zig build -Dtarget=${{ matrix.arch }}-macos -Doptimize=ReleaseSafe --prefix ${{ env.TARGET }}
 
       - name: Create tarball
         run: tar -czvf ${{ env.TARGET }}.tar.gz ${{ env.TARGET }}
