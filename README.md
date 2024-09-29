@@ -1,6 +1,6 @@
 # zig-nestedtext
 
-[![Build badge](https://img.shields.io/github/workflow/status/LewisGaul/zig-nestedtext/Run%20tests/main)](https://github.com/LewisGaul/zig-nestedtext/actions/workflows/tests.yml?query=branch%3Amain)
+[![Build badge](https://img.shields.io/github/actions/workflow/status/LewisGaul/zig-nestedtext/tests.yml?branch=main)](https://github.com/LewisGaul/zig-nestedtext/actions/workflows/tests.yml?query=branch%3Amain)
 [![Release badge](https://img.shields.io/github/v/release/LewisGaul/zig-nestedtext?include_prereleases&sort=semver)](https://github.com/LewisGaul/zig-nestedtext/releases/)
 
 
